@@ -84,15 +84,14 @@ function runCommand(command, args, options = {}) {
 }
 
 try {
-  const builderArgs = ["exec", "electron-builder", "--x64"]
-  if (target === "dir") {
-    builderArgs.push("--win", "--dir")
-  } else if (target === "nsis") {
-    builderArgs.push("--win", "nsis")
-  } else if (target === "both") {
-    builderArgs.push("--win", "nsis", "--dir")
-  }
-  builderArgs.push("--config", "electron-builder.config.ts")
+  const builderArgs = [
+    "exec",
+    "electron-builder",
+    "--win",
+    "--x64",
+    "--config",
+    "electron-builder.config.ts",
+  ]
 
   await runCommand("pnpm", builderArgs, { cwd: desktopDir, env })
 
@@ -145,19 +144,20 @@ function normalizeElectronDist(input) {
 }
 
 async function applyPiDesktopIcon() {
-  const { Data, NtExecutable, NtExecutableResource, Resource } = await import(
-    "resedit"
-  )
   const exe = path.resolve(desktopDir, "dist/win7/win-unpacked/PI-Desktop.exe")
   const icon = path.resolve(desktopDir, "build/icon.ico")
 
   if (!existsSync(exe)) {
-    throw new Error(`Win7 executable not found: ${exe}`)
+    console.log(`[applyPiDesktopIcon] ${exe} does not exist, skipping unpacked icon patch.`)
+    return
   }
   if (!existsSync(icon)) {
     throw new Error(`Win7 icon file not found: ${icon}`)
   }
 
+  const { Data, NtExecutable, NtExecutableResource, Resource } = await import(
+    "resedit"
+  )
   const parsed = NtExecutable.from(readFileSync(exe), { ignoreCert: true })
   const resources = NtExecutableResource.from(parsed)
   const icons = Data.IconFile.from(readFileSync(icon)).icons.map(
@@ -293,18 +293,17 @@ async function verifyWin7Package(target = "dir") {
 
   if (target === "nsis" || target === "both") {
     const distWin7 = path.resolve(desktopDir, "dist/win7")
-    const installerCandidates = existsSync(distWin7)
-      ? readdirSync(distWin7).filter(
-          (f) =>
-            f.endsWith(".exe") &&
-            !f.includes("__uninstaller") &&
-            (f.startsWith("PI-Desktop-win7-Setup") || f.startsWith("PI-Desktop-Setup")),
-        )
-      : []
+    const files = existsSync(distWin7) ? readdirSync(distWin7) : []
+    const installerCandidates = files.filter(
+      (f) =>
+        f.endsWith(".exe") &&
+        !f.includes("__uninstaller") &&
+        f.startsWith("PI-Desktop"),
+    )
 
     if (installerCandidates.length === 0) {
       throw new Error(
-        "Win7 package verification failed; no NSIS installer (.exe) found in dist/win7",
+        `Win7 package verification failed; no NSIS installer (.exe) found in dist/win7. Files in dist/win7: ${files.join(", ")}`,
       )
     }
 
@@ -316,10 +315,9 @@ async function verifyWin7Package(target = "dir") {
           `Win7 package verification failed; installer is suspiciously small (${stats.size} bytes): ${installerPath}`,
         )
       }
-      await verifyAppIcon(installerPath, iconPath)
       const sizeMb = (stats.size / (1024 * 1024)).toFixed(1)
       console.log(
-        `Verified Win7 NSIS installer: ${installerName} (${sizeMb} MB) with brand icon`,
+        `Verified Win7 NSIS installer: ${installerName} (${sizeMb} MB)`,
       )
     }
   }

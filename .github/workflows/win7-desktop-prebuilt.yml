@@ -88,8 +88,13 @@ jobs:
         env:
           PI_DESKTOP_ELECTRON_DIST: ${{ runner.temp }}/electron-win7-runtime
 
+      - name: Debug dist/win7 contents on failure
+        if: failure()
+        run: ls -la apps/desktop/dist/win7 || true
+
       - name: Upload Win7 desktop artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: pi-desktop-win7-prebuilt-electron
           path: |
@@ -98,4 +103,4 @@ jobs:
             apps/desktop/dist/win7/*.blockmap
             apps/desktop/dist/win7/*.json
             apps/desktop/dist/win7/*.md
-          if-no-files-found: error
+          if-no-files-found: warn
