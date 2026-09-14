@@ -102,7 +102,7 @@ const config: Configuration = {
     extraResources: hostCoreExeExists
       ? [
           {
-            from: "../../target/release/pi-desktop-host-core.exe",
+            from: hostCoreExePath,
             to: "bin/pi-desktop-host-core.exe",
           },
         ]

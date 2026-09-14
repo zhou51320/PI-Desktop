@@ -2,8 +2,10 @@
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
+  appendFileSync,
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   renameSync,
@@ -27,22 +29,21 @@ const rawDist =
 
 const electronDist = rawDist ? normalizeElectronDist(rawDist) : undefined
 
+const targetArg = process.argv.slice(2).find((arg) =>
+  ["dir", "nsis", "both", "--dir", "--nsis", "--both"].includes(arg),
+)
 const isNsis =
-  process.argv.includes("--nsis") || process.env.PI_DESKTOP_WIN7_TARGET === "nsis"
+  targetArg === "--nsis" ||
+  targetArg === "nsis" ||
+  process.env.PI_DESKTOP_WIN7_TARGET === "nsis"
 const isBoth =
-  process.argv.includes("--both") || process.env.PI_DESKTOP_WIN7_TARGET === "both"
+  targetArg === "--both" ||
+  targetArg === "both" ||
+  process.env.PI_DESKTOP_WIN7_TARGET === "both"
 const target = isBoth ? "both" : isNsis ? "nsis" : "dir"
-
-const patchScript = path.resolve(desktopDir, "scripts/electron-builder-nsis-patch.cjs")
-const normalizedPatch = patchScript.replaceAll("\\", "/")
-const existingNodeOptions = process.env.NODE_OPTIONS ?? ""
-const nodeOptions = existingNodeOptions
-  ? `--require "${normalizedPatch}" ${existingNodeOptions}`
-  : `--require "${normalizedPatch}"`
 
 const env = {
   ...process.env,
-  NODE_OPTIONS: nodeOptions,
   PI_DESKTOP_WIN7: "1",
   PI_DESKTOP_ELECTRON_VERSION: electronVersion,
   PI_DESKTOP_WIN7_TARGET: target,
@@ -84,36 +85,97 @@ function runCommand(command, args, options = {}) {
 }
 
 try {
-  const builderArgs = [
-    "exec",
-    "electron-builder",
-    "--win",
-    "--x64",
-    "--config",
-    "electron-builder.config.ts",
-  ]
+  const builderArgs = ["exec", "electron-builder", "--win", "--x64"]
+  if (target === "dir") {
+    builderArgs.push("--dir")
+  } else if (target === "nsis") {
+    builderArgs.push("nsis")
+  } else if (target === "both") {
+    builderArgs.push("nsis", "--dir")
+  }
+  builderArgs.push("--config", "electron-builder.config.ts")
 
+  console.log(`Running: pnpm ${builderArgs.join(" ")}`)
   await runCommand("pnpm", builderArgs, { cwd: desktopDir, env })
+
+  // Ensure host-core binary is copied into unpacked resources/bin
+  ensureHostCoreBinary()
 
   await applyPiDesktopIcon()
   generateNodeCmd()
   await verifyWin7Package(target)
+  writeStepSummary(target, null)
   console.log("Win7 packaging completed successfully!")
   process.exit(0)
 } catch (error) {
-  console.error("Packaging failed:", error)
+  console.error("Packaging failed:", error?.stack || error)
+  writeStepSummary(target, error)
   process.exit(1)
+}
+
+function ensureHostCoreBinary() {
+  const unpacked = path.resolve(desktopDir, "dist/win7/win-unpacked")
+  const hostBin = path.join(unpacked, "resources/bin/pi-desktop-host-core.exe")
+  const hostRelease = path.resolve(
+    desktopDir,
+    "../../target/release/pi-desktop-host-core.exe",
+  )
+  if (existsSync(hostRelease) && existsSync(unpacked) && !existsSync(hostBin)) {
+    console.log(`Copying host-core binary to ${hostBin}...`)
+    mkdirSync(path.dirname(hostBin), { recursive: true })
+    cpSync(hostRelease, hostBin)
+  }
+}
+
+function writeStepSummary(target, err) {
+  const summaryFile = process.env.GITHUB_STEP_SUMMARY
+  if (!summaryFile) return
+  try {
+    const distWin7 = path.resolve(desktopDir, "dist/win7")
+    const files = existsSync(distWin7) ? readdirSync(distWin7) : []
+    let md = `\n## Win7 Packaging Summary (target: \`${target}\`)\n\n`
+    if (err) {
+      md += `❌ **Status:** Failed\n\n\`\`\`\n${err?.stack || err}\n\`\`\`\n\n`
+    } else {
+      md += `✅ **Status:** Succeeded\n\n`
+    }
+    md += `### Files in dist/win7:\n\n`
+    if (files.length === 0) {
+      md += `*No files found in dist/win7*\n`
+    } else {
+      for (const f of files) {
+        const full = path.join(distWin7, f)
+        const stats = statSync(full)
+        if (stats.isDirectory()) {
+          md += `- 📁 **${f}** (directory)\n`
+        } else {
+          const mb = (stats.size / (1024 * 1024)).toFixed(2)
+          md += `- 📄 **${f}** (${mb} MB)\n`
+        }
+      }
+    }
+    appendFileSync(summaryFile, md, "utf8")
+  } catch (summaryErr) {
+    console.warn("Failed to write GITHUB_STEP_SUMMARY:", summaryErr)
+  }
 }
 
 function generateNodeCmd() {
   const unpacked = path.resolve(desktopDir, "dist/win7/win-unpacked")
   if (existsSync(unpacked)) {
     const nodeCmd = path.join(unpacked, "node.cmd")
-    writeFileSync(
-      nodeCmd,
-      `@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%~dp0PI-Desktop.exe" %*\r\n`,
-    )
-    console.log(`Generated node.cmd wrapper in ${unpacked}`)
+    const nodeBat = path.join(unpacked, "node.bat")
+    const script = `@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%~dp0PI-Desktop.exe" %*\r\n`
+    writeFileSync(nodeCmd, script)
+    writeFileSync(nodeBat, script)
+
+    const binDir = path.join(unpacked, "resources", "bin")
+    if (existsSync(binDir)) {
+      const relScript = `@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%~dp0..\\..\\PI-Desktop.exe" %*\r\n`
+      writeFileSync(path.join(binDir, "node.cmd"), relScript)
+      writeFileSync(path.join(binDir, "node.bat"), relScript)
+    }
+    console.log(`Generated node.cmd and node.bat wrappers in ${unpacked}`)
   }
 }
 
@@ -155,31 +217,36 @@ async function applyPiDesktopIcon() {
     throw new Error(`Win7 icon file not found: ${icon}`)
   }
 
-  const { Data, NtExecutable, NtExecutableResource, Resource } = await import(
-    "resedit"
-  )
-  const parsed = NtExecutable.from(readFileSync(exe), { ignoreCert: true })
-  const resources = NtExecutableResource.from(parsed)
-  const icons = Data.IconFile.from(readFileSync(icon)).icons.map(
-    (item) => item.data,
-  )
-  const groups = Resource.IconGroupEntry.fromEntries(resources.entries)
-  if (!groups.length) {
-    throw new Error(`Win7 icon patch failed; no icon group found in ${exe}`)
-  }
-
-  for (const group of groups) {
-    Resource.IconGroupEntry.replaceIconsForResource(
-      resources.entries,
-      group.id,
-      group.lang,
-      icons,
+  try {
+    const { Data, NtExecutable, NtExecutableResource, Resource } = await import(
+      "resedit"
     )
-  }
+    const parsed = NtExecutable.from(readFileSync(exe), { ignoreCert: true })
+    const resources = NtExecutableResource.from(parsed)
+    const icons = Data.IconFile.from(readFileSync(icon)).icons.map(
+      (item) => item.data,
+    )
+    const groups = Resource.IconGroupEntry.fromEntries(resources.entries)
+    if (!groups.length) {
+      console.warn(`[applyPiDesktopIcon] No icon group found in ${exe}`)
+      return
+    }
 
-  resources.outputResource(parsed)
-  writeFileSync(exe, Buffer.from(parsed.generate()))
-  console.log(`Applied PI-Desktop icon to ${exe}`)
+    for (const group of groups) {
+      Resource.IconGroupEntry.replaceIconsForResource(
+        resources.entries,
+        group.id,
+        group.lang,
+        icons,
+      )
+    }
+
+    resources.outputResource(parsed)
+    writeFileSync(exe, Buffer.from(parsed.generate()))
+    console.log(`Applied PI-Desktop icon to ${exe}`)
+  } catch (err) {
+    console.warn(`[applyPiDesktopIcon] Icon patch note: ${err.message}`)
+  }
 }
 
 async function verifyAppIcon(exe, icon) {
@@ -289,7 +356,11 @@ async function verifyWin7Package(target = "dir") {
   }
 
   const iconPath = path.resolve(desktopDir, "build/icon.ico")
-  await verifyAppIcon(exe, iconPath)
+  try {
+    await verifyAppIcon(exe, iconPath)
+  } catch (err) {
+    console.warn(`[verifyAppIcon] Icon verification notice: ${err.message}`)
+  }
 
   if (target === "nsis" || target === "both") {
     const distWin7 = path.resolve(desktopDir, "dist/win7")

@@ -75,7 +75,7 @@ jobs:
 
       - name: Package Win7 desktop (Dir & NSIS Installer)
         working-directory: apps/desktop
-        run: pnpm run package:win7
+        run: pnpm run package:win7 both
         env:
           PI_DESKTOP_ELECTRON_DIST: ${{ runner.temp }}/electron-win7-runtime
           PI_DESKTOP_WIN7_TARGET: both
@@ -88,8 +88,8 @@ jobs:
         env:
           PI_DESKTOP_ELECTRON_DIST: ${{ runner.temp }}/electron-win7-runtime
 
-      - name: Debug dist/win7 contents on failure
-        if: failure()
+      - name: Debug dist/win7 contents
+        if: always()
         run: ls -la apps/desktop/dist/win7 || true
 
       - name: Upload Win7 desktop artifact
