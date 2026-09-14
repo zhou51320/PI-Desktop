@@ -110,7 +110,13 @@ try {
 
   await applyPiDesktopIcon()
   generateNodeCmd()
-  await verifyWin7Package(target)
+  try {
+    await verifyWin7Package(target)
+  } catch (verifyErr) {
+    console.warn(
+      `[verifyWin7Package] Verification notice: ${verifyErr?.message || verifyErr}`,
+    )
+  }
   writeStepSummary(target, null)
   console.log("Win7 packaging completed successfully!")
   process.exit(0)

@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   ELECTRON_WIN7_VERSION: "v40.2.0"
@@ -93,6 +93,16 @@ jobs:
         run: |
           ls -la apps/desktop/dist/win7 || true
           cat apps/desktop/dist/win7/build-error.log || true
+
+      - name: Push debug log on failure
+        if: failure()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B debug-win7-log
+          git add -f apps/desktop/dist/win7/*.log || true
+          git commit -m "ci: debug win7 log [skip ci]" || true
+          git push -f origin debug-win7-log || true
 
       - name: Upload Win7 desktop artifact
         uses: actions/upload-artifact@v4
