@@ -10,6 +10,10 @@ import {
   type NativeMenuAction,
 } from "@pi-desktop/shared";
 import { installApplicationMenu } from "../application-menu";
+import {
+  installPluginAssetProtocol,
+  registerPluginAssetScheme,
+} from "../plugin-asset-protocol";
 import { applyNetworkProxyFromAppSettings } from "../network-proxy";
 import { readCloseBehavior } from "../window-preferences";
 import { createAgentHostBridge, type AgentHostBridge } from "../agent-host-bridge";
@@ -49,7 +53,12 @@ export type StartupDependencies = {
   modelsDevCatalog: ModelsDevCatalog;
   plugins: PluginRuntime;
   activeTurns: Map<string, string>;
-  turnFinalizations: Map<string, Promise<void>>;
+  /**
+   * Shared busy check from `runtime/session-coordination.ts`. The queue must
+   * stay held while a turn's announcement is still running, so this cannot be
+   * derived here from `activeTurns` alone.
+   */
+  isSessionBusy: (sessionId: string) => boolean;
   getHost: () => HostProcess | null;
   getMainWindow: () => BrowserWindow | null;
   sendToRenderer: (channel: string, payload: unknown) => void;
@@ -84,6 +93,9 @@ export type StartupDependencies = {
  * composition root through `StartupState` and dependency callbacks.
  */
 export function registerApplicationStartup(deps: StartupDependencies): void {
+  // Electron only accepts scheme privileges before the app is ready, and this
+  // runs from the composition root, before the `whenReady` promise can settle.
+  registerPluginAssetScheme();
   void app.whenReady().then(async () => {
     const {
       hasSingleInstanceLock,
@@ -94,7 +106,7 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
       modelsDevCatalog,
       plugins,
       activeTurns,
-      turnFinalizations,
+      isSessionBusy,
       getHost,
       getMainWindow,
       sendToRenderer,
@@ -119,6 +131,11 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
     // create a window, a tray, or a child process on top of the running app.
     if (!hasSingleInstanceLock) return;
     applyDevelopmentBranding();
+    // Serve declared theme assets before the renderer can ask for one; the
+    // scheme itself was reserved in `registerApplicationStartup`.
+    installPluginAssetProtocol((pluginId, assetPath) =>
+      plugins.resolveThemeAsset(pluginId, assetPath),
+    );
     // Load the close-behavior preference before the first window exists: the
     // close handler reads `closeBehavior` synchronously, and a window created
     // while it still held the "ask" default would prompt a user who already
@@ -145,8 +162,7 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
       invoke: invokeIpc,
       channels: IPC.invoke,
       getHost,
-      isSessionBusy: (sessionId) =>
-        activeTurns.has(sessionId) || turnFinalizations.has(sessionId),
+      isSessionBusy,
       onQueueChange: (event) => {
         sendToRenderer(IPC.event.agentQueueChanged, event);
         deps.onSessionQueueChange?.();
@@ -267,12 +283,24 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
                    : await api.invoke(api.channels.invoke.windowControl, {
                        action: "getState",
                      });
+               // Project removal channel: a path that cannot have a durable row
+               // still has to survive preload -> main -> host-core and come back
+               // as the documented idempotent no-op.
+               const projectRemove = await api.invoke(
+                 api.channels.invoke.projectRemove,
+                 { path: "pi-desktop-boot-probe-unknown-project" },
+               );
                return {
                  ok: version?.ok === true,
                  version: version?.data?.version,
                  hostProtocol: version?.data?.hostProtocolVersion,
                  platform: api.platform,
                  maximized: windowState?.data?.maximized ?? null,
+                 projectRemove: {
+                   ok: projectRemove?.ok === true,
+                   removed: projectRemove?.data?.removed ?? null,
+                   sessionsRemoved: projectRemove?.data?.sessionsRemoved ?? null,
+                 },
                };
              })()`,
             );

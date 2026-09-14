@@ -5,6 +5,7 @@ import {
   APP_MENU_COMMANDS,
   APP_NAME,
   IPC,
+  isThemeColorScheme,
   type AppMenuCommand,
   type CloseBehavior,
   type KeybindingOverrides,
@@ -392,7 +393,7 @@ export function createApplicationLifecycle({
   function applyNativeThemeSource(settings?: { theme?: unknown } | null) {
     const preference = settings?.theme;
     let next: "system" | "light" | "dark" = "system";
-    if (preference === "light" || preference === "dark") {
+    if (isThemeColorScheme(preference)) {
       next = preference;
     } else if (typeof preference === "string" && preference.startsWith("plugin:")) {
       const pluginTheme = plugins.getThemes().find((theme) => theme.id === preference);
@@ -405,6 +406,36 @@ export function createApplicationLifecycle({
     if (process.platform === "darwin" && state.mainWindow && !state.mainWindow.isDestroyed()) {
       state.mainWindow.setVibrancy("sidebar");
     }
+  }
+
+  /**
+   * Apply only the `AppSettings.theme` preference to the host's appearance
+   * state. Reused by `applyApplicationMenuSettings` so the full-settings path
+   * and the narrow plugin `app.setTheme` path (ADR 0249) agree.
+   *
+   * Deliberately narrower than `applyApplicationMenuSettings`: theme changes
+   * never touch the locale, keybindings, or developer-mode menu state, so a
+   * caller that only knows the theme cannot reset those fields by passing a
+   * partial settings object.
+   */
+  function applyAppThemePreference(preference: unknown) {
+    appearanceState.appThemePreference = isThemeColorScheme(preference)
+      ? preference
+      : typeof preference === "string" && preference.startsWith("plugin:")
+        ? preference
+        : "system";
+    applyNativeThemeSource({ theme: preference });
+    if (isThemeColorScheme(preference)) {
+      appearanceState.pluginPanelTheme = preference;
+    } else if (typeof preference === "string" && preference.startsWith("plugin:")) {
+      const pluginTheme = plugins.getThemes().find((theme) => theme.id === preference);
+      appearanceState.pluginPanelTheme =
+        pluginTheme?.base ?? (nativeTheme.shouldUseDarkColors ? "dark" : "light");
+    } else {
+      appearanceState.pluginPanelTheme = nativeTheme.shouldUseDarkColors ? "dark" : "light";
+    }
+    // Panels mirror the app's palette/language live; push any change now.
+    broadcastAppearance();
   }
 
   /** Keep native labels and accelerators aligned with persisted app settings. */
@@ -424,25 +455,7 @@ export function createApplicationLifecycle({
       appearanceState.updaterLocale = locale;
       refreshReleaseNotes();
     }
-    const preference = settings?.theme;
-    appearanceState.appThemePreference =
-      preference === "light" || preference === "dark"
-        ? preference
-        : typeof preference === "string" && preference.startsWith("plugin:")
-          ? preference
-          : "system";
-    applyNativeThemeSource(settings);
-    if (preference === "light" || preference === "dark") {
-      appearanceState.pluginPanelTheme = preference;
-    } else if (typeof preference === "string" && preference.startsWith("plugin:")) {
-      const pluginTheme = plugins.getThemes().find((theme) => theme.id === preference);
-      appearanceState.pluginPanelTheme =
-        pluginTheme?.base ?? (nativeTheme.shouldUseDarkColors ? "dark" : "light");
-    } else {
-      appearanceState.pluginPanelTheme = nativeTheme.shouldUseDarkColors ? "dark" : "light";
-    }
-    // Panels mirror the app's palette/language live; push any change now.
-    broadcastAppearance();
+    applyAppThemePreference(settings?.theme);
     const keybindings =
       settings?.keybindings && typeof settings.keybindings === "object"
         ? (settings.keybindings as KeybindingOverrides)
@@ -526,6 +539,7 @@ export function createApplicationLifecycle({
     dispatchNativeMenuAction,
     applyDeveloperMode,
     applyNativeThemeSource,
+    applyAppThemePreference,
     applyApplicationMenuSettings,
     resolveAppearance,
     broadcastAppearance,

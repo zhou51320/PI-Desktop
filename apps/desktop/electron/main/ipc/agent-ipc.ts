@@ -1,4 +1,5 @@
 import { IPC, ErrorCodes, isGlobalPermissionMode, type AgentEventEnvelope, type AgentPromptRequest, type AgentSteerRequest, type UiMessage, type AgentQueuePushRequest, type AgentStopRequest, type AskToolResolution, type GlobalPermissionMode, type MessageUsage, type PlanExecutionFinishStatus, type PlanResolutionResult, type PlanResolveRequest, type PromptEnhancementRequest, type SessionSummarizeTitleRequest } from "@pi-desktop/shared";
+import type { FinishTurn } from "../runtime/plans";
 import { expandSlashInvocation, enhancePromptDraft, summarizeSessionTitle, visionFromModelConfig, type ComposerTemplate, type RuntimeProviderConfig } from "@pi-desktop/agent-runtime";
 import { OAUTH_AUTH_KIND, type VendorOAuth } from "../oauth";
 import { appendPromptFallbackPaths, durableUserMessageId, preparePromptAttachments, type PreparedPromptAttachment } from "../prompt-attachments";
@@ -25,13 +26,20 @@ export type AgentIpcDependencies = {
   persistenceOutbox: PersistenceOutbox;
   dataDir: string;
   activeTurns: Map<string, string>;
-  turnFinalizations: Map<string, Promise<void>>;
+  /** Whether the named turn can still start or steer host work. */
+  isTurnDispatchable: (sessionId: string, turnId: string | null | undefined) => boolean;
   activeTurnUsages: Map<string, MessageUsage>;
   approvedExecutionIdsBySession: Map<string, string>;
   claimedExecutionSessions: Map<string, string>;
   resolveAgentRuntimeLaunch: (...args: any[]) => Promise<any>;
   acquireSessionOperation: (sessionId: string) => Promise<() => void>;
-  finishTurn: (sessionId: string, status: "completed" | "aborted" | "error", errorCode?: string, options?: { createNotification?: boolean; recoverInflight?: boolean }) => Promise<void>;
+  finishTurn: FinishTurn;
+  /**
+   * Record a cancellation before the cancel request is issued, so a terminal
+   * event arriving while it is in flight cannot restate the abort as a
+   * completion. A session without a live turn locks nothing.
+   */
+  lockAbortReason: (sessionId: string, turnId: string | null | undefined) => void;
   finishApprovedExecution: (executionId: string, status: PlanExecutionFinishStatus, errorCode?: string) => Promise<void>;
   dispatchApprovedPlan: (execution: unknown) => Promise<void>;
   dispatchExecutionForProposal: (proposalId: string) => Promise<void>;
@@ -55,13 +63,14 @@ export function registerAgentIpc({
   persistenceOutbox,
   dataDir,
   activeTurns,
-  turnFinalizations,
+  isTurnDispatchable,
   activeTurnUsages,
   approvedExecutionIdsBySession,
   claimedExecutionSessions,
   resolveAgentRuntimeLaunch,
   acquireSessionOperation,
   finishTurn,
+  lockAbortReason,
   finishApprovedExecution,
   dispatchApprovedPlan,
   dispatchExecutionForProposal,
@@ -197,7 +206,9 @@ export function registerAgentIpc({
         errorCode: ErrorCodes.INVALID_ARGUMENT,
       });
     }
-    if (activeTurns.get(req.sessionId) !== req.expectedTurnId || turnFinalizations.has(req.sessionId)) {
+    // A steering input belongs to the turn it names: it is refused once that
+    // turn was cancelled, has started finalizing, or no longer owns the session.
+    if (!isTurnDispatchable(req.sessionId, req.expectedTurnId)) {
       throw Object.assign(new Error("The target turn has ended"), {
         errorCode: ErrorCodes.TURN_NOT_FOUND,
       });
@@ -274,12 +285,22 @@ export function registerAgentIpc({
       // Host-owned cut: the kept prefix never crosses the JSON-RPC pipe
       // (issue #211). Abort any leftover running turn first so beginTurn
       // cannot see AGENT_BUSY after a timed-out retry.
+      //
+      // Capture the target turn and lock the abort reason before the cancel
+      // request, as the plain abort path does: a terminal event arriving while
+      // the request is in flight must not restate this abort as a completion.
+      const regenerateTurnId = activeTurns.get(req.sessionId);
+      lockAbortReason(req.sessionId, regenerateTurnId);
       if (sidecar) {
         await sidecar
           .call("agent.abort", { sessionId: req.sessionId })
           .catch(() => undefined);
       }
-      await finishTurn(req.sessionId, "aborted", "TURN_ABORTED");
+      if (regenerateTurnId) {
+        await finishTurn(req.sessionId, "aborted", "TURN_ABORTED", {
+          turnId: regenerateTurnId,
+        });
+      }
 
       try {
         await persistenceOutbox.flush(() => host);
@@ -411,7 +432,9 @@ export function registerAgentIpc({
         supportsVision,
       );
     } catch (error) {
-      await finishTurn(req.sessionId, "error", (error as any)?.errorCode);
+      await finishTurn(req.sessionId, "error", (error as any)?.errorCode, {
+        turnId: durableTurnId,
+      });
       throw error;
     }
     const modelContent = appendPromptFallbackPaths(
@@ -465,7 +488,10 @@ export function registerAgentIpc({
         (error as { data?: { errorCode?: string }; errorCode?: string })?.data
           ?.errorCode ??
           (error as { errorCode?: string })?.errorCode,
+        { turnId: durableTurnId },
       );
+      // A turn whose user message could not be appended must not be started:
+      // restarting it here would run a prompt the transcript does not contain.
       throw error;
     }
     emitAgentEvent({
@@ -504,7 +530,9 @@ export function registerAgentIpc({
         },
       );
     } catch (e) {
-      await finishTurn(req.sessionId, "error", (e as any)?.errorCode);
+      await finishTurn(req.sessionId, "error", (e as any)?.errorCode, {
+        turnId: durableTurnId,
+      });
       throw e;
     }
     logger.app("session", "info", "prompt accepted", {
@@ -556,6 +584,10 @@ export function registerAgentIpc({
     if (req.turnId && abortedTurnId !== req.turnId) return { ok: false, aborted: false };
     logger.app("session", "info", "prompt aborted", { sessionId: req.sessionId });
     agentHostBridge?.markAborting(req.sessionId);
+    // Lock the abort reason before the first await: the cancel RPC can take a
+    // while, and a terminal event arriving in that window must not settle the
+    // turn as completed.
+    lockAbortReason(req.sessionId, abortedTurnId);
     const executionId =
       approvedExecutionIdsBySession.get(req.sessionId) ??
       [...claimedExecutionSessions].find(
@@ -568,8 +600,12 @@ export function registerAgentIpc({
       cancelSessionTools(req.sessionId, "Session turn was aborted");
       result = await sidecar.call("agent.abort", req);
     } finally {
-      if (activeTurns.get(req.sessionId) === abortedTurnId) {
-        await finishTurn(req.sessionId, "aborted", "TURN_ABORTED");
+      // A turn that already stopped owning the session is refused inside the
+      // finalizer, so the identity captured above is the only one used here.
+      if (abortedTurnId) {
+        await finishTurn(req.sessionId, "aborted", "TURN_ABORTED", {
+          turnId: abortedTurnId,
+        });
       }
       if (executionId) {
         await finishApprovedExecution(

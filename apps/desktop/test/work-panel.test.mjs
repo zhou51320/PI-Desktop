@@ -465,14 +465,20 @@ test("background panel updates do not replace or resize the visible session", ()
 });
 
 test("deleting a session also removes its retained work panel context", () => {
+  // The cleanup is one shared helper so session and project deletion cannot
+  // drift apart, so the contract is asserted on the helper itself.
+  const cleanupBlock =
+    storeSource.match(/function clearLocalSessionState\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(cleanupBlock, "local session cleanup helper exists");
+  assert.match(cleanupBlock, /workPanelContexts/);
+  assert.match(
+    cleanupBlock,
+    /delete workPanelContexts\[id\]|withoutRecordKey\([^)]*workPanelContexts,\s*id\)/,
+  );
   const deleteBlock =
     storeSource.match(/deleteSession: async[\s\S]*?\n\s+setSessionSort:/)?.[0] ?? "";
   assert.ok(deleteBlock, "deleteSession action exists");
-  assert.match(deleteBlock, /workPanelContexts/);
-  assert.match(
-    deleteBlock,
-    /delete workPanelContexts\[id\]|withoutRecordKey\([^)]*workPanelContexts,\s*id\)/,
-  );
+  assert.match(deleteBlock, /clearLocalSessionState\(/);
 });
 
 test("the panel and a new tab share the same launcher rows", async () => {
@@ -585,5 +591,13 @@ test("preview mode keeps shell actions and restores routes before navigation", (
   assert.match(
     globalStyles,
     /:root\[data-platform="darwin"\]\[data-fullscreen="true"\][\s\S]*?\.window-chrome-row:not\(\.sidebar-expanded\) \{[\s\S]*?padding-left:\s*8px;/,
+  );
+  assert.match(
+    globalStyles,
+    /:root\[data-platform="darwin"\]:not\(\[data-fullscreen="true"\]\)[\s\S]*?\.app-shell\.work-panel-maximized\.sidebar-collapsed\s+\.work-panel-header\s*\{[^}]*padding-left:\s*calc\(76px \+ var\(--ds-preview-action-lane-width\)\);/,
+  );
+  assert.match(
+    globalStyles,
+    /:root\[data-platform="darwin"\]\[data-fullscreen="true"\][\s\S]*?\.app-shell\.work-panel-maximized\.sidebar-collapsed\s+\.work-panel-header\s*\{[^}]*padding-left:\s*calc\(8px \+ var\(--ds-preview-action-lane-width\)\);/,
   );
 });

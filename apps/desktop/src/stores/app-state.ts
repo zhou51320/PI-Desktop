@@ -241,6 +241,14 @@ export type AppState = {
   switchProjectPath: (path: string) => Promise<ProjectWorkspace | null>;
   closeProjectPath: (path: string) => Promise<void>;
   clearProject: (opts?: NavigationOptions) => Promise<void>;
+  /**
+   * Delete a project and its stored sessions on the host, then drop every
+   * renderer-local record of it. A path the host has no durable row for is
+   * still removed locally instead of being reported as missing. Host errors
+   * (such as a path that belongs to a multi-folder project group) propagate to
+   * the caller.
+   */
+  deleteProject: (path: string) => Promise<void>;
   toggleSessionPinned: (id: string) => void;
   toggleSessionArchived: (id: string) => void;
   archiveSession: (id: string) => void;

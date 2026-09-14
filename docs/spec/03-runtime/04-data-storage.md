@@ -31,6 +31,16 @@ schema v7, v8, v11, and v14:
 4. **Extensible without migrations** where cheap (block vocabulary, JSONL line
    types, kv namespaces, `config_json` columns), **with migrations** where
    structural (new entities), versioned by `PRAGMA user_version`.
+
+Project groups use the existing `kv` extension boundary rather than a new
+relational schema. The host stores one JSON record per group in the
+`projectGroups` namespace, shared memory in `projectGroupMemory`, and shared
+instructions in `projectGroupInstructions`. The record contains the stable group
+id, display name, ordered canonical roots, primary root, timestamps, and optional
+`detachedPaths`. Removed roots stay in `detachedPaths` so an old path project
+record is not recreated as a standalone legacy group; sessions and files are not
+deleted. Existing path projects are projected as legacy single-root groups at
+read time; their path-scoped memory and filesystem instructions remain readable.
 5. **Plan/Goal checkpoints are immutable host artifacts** with recorded path,
    hash, and size; the existing approval row also carries execution fields.
    Startup interruption is the process-epoch fence and no work is replayed.
@@ -1052,6 +1062,7 @@ is the source of truth, the index is derived and self-healing.
 | revision switch | append a refresh line for the live branch's own variant, read the target branch, atomic transcript rewrite keeping checkpoints whose anchors survive | flip `is_active`, rebuild index rows carrying each surviving message's owning `turn_id`, reset `last_seq` |
 | import | write transcript file | one tx per session: session row + index rows; on failure the file is removed |
 | session delete | remove both session files after row delete | `DELETE FROM sessions` (cascades); Electron main drops that session's outbox entries (D318) |
+| project delete (`projects.remove`) | remove each owned session's files after its row delete | one tx per session (`DELETE FROM sessions`, cascades) plus the project row and its `projectMemory` kv entry; the project folder on disk is never touched |
 | orphaned session restore (boot / `session.appendMessage`, D318) | leave the live JSONL in place | reinsert the missing `sessions` row and rebuild index rows from the file; if the file is also gone, append inserts a stub row under the existing id so the outbox can drain |
 
 Rules: user message durable (fsync'd file line) before the turn starts;

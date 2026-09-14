@@ -173,6 +173,7 @@ All color references in components use **semantic token names**, never raw hex v
 |---|---|---|---|
 | `--color-bg-primary` | `#181818` | Codex `gray-900` | Main surface |
 | `--color-bg-sidebar` / under | `#000000` (dark) / `#f3f3f3` (light) | Codex `surface-under` / gray-75 | Sidebar rail |
+| `--ds-bg-sidebar-image` | `none` (optional `<image>`) | — | Sidebar `background-image` only (gradients / pictures). `--ds-bg-sidebar` stays a color for glass tint, borders, and `color-mix` |
 | `--color-bg-secondary` | `#212121` | Codex `gray-800` | Elevated surfaces, composer |
 | `--color-bg-tertiary` | `#282828` | Codex `gray-750` | Hover / opaque elevated |
 | `--color-bg-inset` | `#0d0d0d` | Codex `gray-1000` | Code blocks, deepest inset |
@@ -563,6 +564,12 @@ floating layers where an edge is an elevation cue rather than a partition.
 | Page | `--ds-bg-primary` | The route or dialog body itself |
 | Tile | `--ds-tile` (3.5% text mix); hover `--ds-tile-hover` (6%); deep `--ds-tile-deep` (8%) | Panels, list rows, cards, form fields, chips, code blocks, empty states |
 | Raised | `--ds-raised` + `--ds-raised-shadow` | The active pill of a segmented control, a disclosed detail block, a recorder keycap |
+| Dock | `--ds-bg-dock` (the column), `--ds-bg-dock-raised` (its header and viewer strips) | The work-panel column and the bars inside it. Both are tokens, not literals, so a contributed theme can move them (D419) |
+
+Every surface colour the shell paints must come from a token. A
+`:root[data-theme="light"]` override that writes a literal raises specificity
+above the base token rule and does not read a variable, so it silently pins that
+surface out of every theme's reach — see D419.
 
 | Context | Treatment |
 |---|---|
@@ -809,7 +816,11 @@ places the caret after the inserted content. A failed or unsupported read keeps
 the chip in place. The renderer resolves any remaining sentinel references
 exactly once immediately before dispatch. The threshold is an AI → Defaults
 setting, defaults to 600 characters, and applies only to text-only pastes;
-clipboard files and images retain their chip presentation.
+clipboard files and images retain their chip presentation. Word's mixed
+`text/plain` plus generated `image/*` copies selects the text representation
+when the text is not whitespace-only and no file has a native path. That text
+uses the same threshold. Native files, non-image files, and image-only or
+whitespace-plus-image pastes retain their chips.
 
 ## 8.2 Composer runtime controls
 
@@ -965,7 +976,9 @@ Preview mode is a transient shell state: MainChat is unmounted and the work
 panel occupies the client width beside the sidebar. A window-level 46px chrome
 row owns the drag area, New Task/sidebar actions, and native window controls.
 Collapsed-sidebar preview reserves 76px on the left for macOS traffic lights in
-windowed mode and 8px in fullscreen.
+windowed mode and 8px in fullscreen. The maximized panel header retains that
+native reserve, then adds the preview action lane and an 8px gap before its
+first tab.
 
 ### 10.1 Responsive collapse
 

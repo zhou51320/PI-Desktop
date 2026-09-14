@@ -56,6 +56,7 @@ import type {
   MarketPluginDetail,
   PluginInstallResult,
   ProjectRecord,
+  ProjectGroupRecord,
   ProjectMemory,
   ProjectMemoryEntry,
   ProjectWorkspace,
@@ -473,6 +474,26 @@ export const api = {
     invoke<{ workspace: ProjectWorkspace | null }>(IPC.invoke.projectGet),
   listProjects: () =>
     invoke<{ projects: ProjectRecord[] }>(IPC.invoke.projectList),
+  listProjectGroups: () =>
+    invoke<{ groups: ProjectGroupRecord[] }>(IPC.invoke.projectGroupList),
+  createProjectGroup: (name: string, folders: string[]) =>
+    invoke<{ group: ProjectGroupRecord }>(IPC.invoke.projectGroupCreate, { name, folders }),
+  renameProjectGroup: (groupId: string, name: string) =>
+    invoke<{ group: ProjectGroupRecord }>(IPC.invoke.projectGroupRename, { groupId, name }),
+  updateProjectGroup: (groupId: string, name: string, folders: string[]) =>
+    invoke<{ group: ProjectGroupRecord }>(IPC.invoke.projectGroupUpdate, {
+      groupId,
+      name,
+      folders,
+    }),
+  getProjectGroupMemory: (groupId: string) =>
+    invoke<{ memory: ProjectMemory }>(IPC.invoke.projectGroupMemoryGet, { groupId }),
+  saveProjectGroupMemory: (groupId: string, entries: ProjectMemory["entries"]) =>
+    invoke<{ memory: ProjectMemory }>(IPC.invoke.projectGroupMemorySave, { groupId, entries }),
+  getProjectGroupInstructions: (groupId: string) =>
+    invoke<{ content: string }>(IPC.invoke.projectGroupInstructionsGet, { groupId }),
+  saveProjectGroupInstructions: (groupId: string, content: string) =>
+    invoke<{ content: string }>(IPC.invoke.projectGroupInstructionsSave, { groupId, content }),
   openProject: () =>
     invoke<{ workspace: ProjectWorkspace | null; canceled?: boolean }>(
       IPC.invoke.projectOpen,
@@ -510,6 +531,11 @@ export const api = {
   recordClipboardPaste: (text: string) =>
     invoke<{ ok: boolean }>(IPC.invoke.clipboardRecordPaste, { text }),
   clearProject: () => invoke(IPC.invoke.projectClear),
+  removeProject: (path: string) =>
+    invoke<{ removed: boolean; sessionsRemoved: number }>(
+      IPC.invoke.projectRemove,
+      { path },
+    ),
   setProject: (path: string) =>
     invoke<{ workspace: ProjectWorkspace | null }>(IPC.invoke.projectSet, path),
   listPullRequests: () =>
@@ -893,10 +919,10 @@ export const api = {
       IPC.invoke.windowSetWorkPanelChatWidth,
       { width },
     ),
-  setWindowBackgroundColor: (theme: "light" | "dark") =>
-    invoke<{ applied: boolean; theme: "light" | "dark" }>(
+  setWindowBackgroundColor: (theme: "light" | "dark", color?: string) =>
+    invoke<{ applied: boolean; theme: "light" | "dark"; color?: string }>(
       IPC.invoke.windowSetBackgroundColor,
-      { theme },
+      { theme, color },
     ),
   windowControl: (action: WindowControlAction) =>
     invoke<{ maximized: boolean }>(IPC.invoke.windowControl, { action }),
@@ -1064,6 +1090,12 @@ export const api = {
     if (!window.piDesktop?.on) return () => undefined;
     return window.piDesktop.on(IPC.event.pluginChanged, (payload) =>
       listener((payload ?? {}) as { reason?: string; pluginId?: string }),
+    );
+  },
+  onSettingsChanged: (listener: (patch: Record<string, unknown>) => void) => {
+    if (!window.piDesktop?.on) return () => undefined;
+    return window.piDesktop.on(IPC.event.settingsChanged, (payload) =>
+      listener((payload ?? {}) as Record<string, unknown>),
     );
   },
   onPluginLauncherShown: (listener: () => void) => {

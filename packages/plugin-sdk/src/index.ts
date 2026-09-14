@@ -7,6 +7,11 @@ import {
 } from "./fs-policy.js";
 import { validateMcpServer } from "./mcp-config.js";
 import { parseNetDomains, type PluginNetDomain } from "./net-policy.js";
+import {
+  isThemeAssetPath,
+  normalizeThemeAssetPath,
+  THEME_ASSET_EXTENSIONS,
+} from "./theme-css.js";
 
 /**
  * Manifest id shape frozen by docs/spec/07-plugins/02-plugin-manifest-schema.md:
@@ -74,6 +79,8 @@ export type PluginManifest = {
     agentExtensions?: string[];
     settings?: PluginSettingContrib[];
     themes?: PluginThemeContrib[];
+    /** Native window background for this plugin's themes (ADR 0248). */
+    windowAppearance?: PluginWindowAppearanceContrib;
     mcpServers?: PluginMcpServerContrib[];
     services?: PluginServiceContrib[];
     bus?: PluginBusContrib;
@@ -302,7 +309,30 @@ export type PluginThemeContrib = {
   path: string;
   /** Base palette the overrides are layered on. Defaults to `dark`. */
   base?: "light" | "dark";
+  /**
+   * Relative paths (extension whitelist, 4 MB summed) this theme's CSS may
+   * reference with `url()`. The host rewrites each matching reference to its own
+   * `plugin-asset://` scheme; anything not declared here is still refused.
+   */
+  assets?: string[];
 };
+
+/**
+ * Native window chrome a theme may ask for. Only honoured while one of this
+ * plugin's themes is the selected theme, and only with the
+ * `ui.window.appearance` grant.
+ */
+export type PluginWindowAppearanceContrib = {
+  /** `#rrggbb` or `#rrggbbaa`, applied per resolved palette. */
+  backgroundColor?: { light?: string; dark?: string };
+};
+
+/** The only colour form a contributed window background may take. */
+export const WINDOW_BACKGROUND_COLOR_PATTERN = /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/;
+
+export function isWindowBackgroundColor(value: unknown): value is string {
+  return typeof value === "string" && WINDOW_BACKGROUND_COLOR_PATTERN.test(value);
+}
 
 export type PluginMcpServerContrib = {
   id: string;
@@ -588,11 +618,43 @@ export type PluginAppearance = {
   pluginTheme: { id: string; base: "light" | "dark"; css: string } | null;
 };
 
+/** Built-in theme preference, or a registered `plugin:<pluginId>:<themeId>` id. */
+export type AppThemePreferenceId = "system" | "light" | "dark" | `plugin:${string}`;
+
+/** Runtime theme payload for `pi.themes.upsert`. Sanitized with the load-time rules. */
+export type PluginThemeUpsertInput = {
+  /** Local theme id (same rules as `contributes.themes[].id`). */
+  id: string;
+  label: string;
+  base: "light" | "dark";
+  css: string;
+};
+
+/** Lightweight theme row returned by `pi.themes.list`. */
+export type PluginThemeSummary = {
+  /** Full namespaced id: `plugin:<pluginId>:<themeId>`. */
+  id: string;
+  themeId: string;
+  label: string;
+  base: "light" | "dark";
+};
+
 export type PluginHostApi = {
   app: {
     getVersion: () => Promise<string>;
     getLocale: () => Promise<string>;
     getAppearance: () => Promise<PluginAppearance>;
+    /**
+     * Apply the host's app theme preference (`ui.theme`). Accepts a built-in
+     * preference or a currently registered plugin theme id.
+     */
+    setTheme: (themeId: AppThemePreferenceId) => Promise<void>;
+  };
+  /** Runtime theme registry for the calling plugin only (`ui.theme`). */
+  themes: {
+    upsert: (input: PluginThemeUpsertInput) => Promise<void>;
+    remove: (themeId: string) => Promise<void>;
+    list: () => Promise<PluginThemeSummary[]>;
   };
   plugin: {
     getId: () => string;
@@ -776,6 +838,7 @@ export const PLUGIN_PERMISSIONS = [
   "ui.view",
   "ui.microphone",
   "ui.theme",
+  "ui.window.appearance",
   "clipboard.read",
   "clipboard.write",
   "notify",
@@ -868,6 +931,16 @@ export function validateManifest(raw: unknown): {
     !(m.permissions ?? []).includes("agent.extension")
   ) {
     return { ok: false, error: "contributes.agentExtensions requires the agent.extension permission" };
+  }
+  if (
+    !contributesError &&
+    m.contributes?.windowAppearance !== undefined &&
+    !(m.permissions ?? []).includes("ui.window.appearance")
+  ) {
+    return {
+      ok: false,
+      error: "contributes.windowAppearance requires the ui.window.appearance permission",
+    };
   }
   if (contributesError) {
     return { ok: false, error: contributesError };
@@ -1031,6 +1104,53 @@ export function validateContributions(
     if (pathError) return pathError;
     if (theme.base !== undefined && theme.base !== "light" && theme.base !== "dark") {
       return `theme "${theme.id}" base must be "light" or "dark"`;
+    }
+    if (theme.assets !== undefined) {
+      if (!Array.isArray(theme.assets)) {
+        return `theme "${theme.id}" assets must be an array`;
+      }
+      const assetPaths = new Set<string>();
+      for (const asset of theme.assets) {
+        if (typeof asset !== "string" || !isThemeAssetPath(asset)) {
+          return `theme "${theme.id}" asset must be a relative ${THEME_ASSET_EXTENSIONS.join(
+            "/",
+          )} path`;
+        }
+        // `bg.png` and `./bg.png` are one asset, so compare the normalized form.
+        const normalized = normalizeThemeAssetPath(asset);
+        if (assetPaths.has(normalized)) {
+          return `theme "${theme.id}" declares "${asset}" twice`;
+        }
+        assetPaths.add(normalized);
+      }
+    }
+  }
+
+  const windowAppearance = contributes.windowAppearance;
+  if (windowAppearance !== undefined) {
+    if (
+      typeof windowAppearance !== "object" ||
+      windowAppearance === null ||
+      Array.isArray(windowAppearance)
+    ) {
+      return "contributes.windowAppearance must be an object";
+    }
+    const backgroundColor = windowAppearance.backgroundColor;
+    if (backgroundColor !== undefined) {
+      if (
+        typeof backgroundColor !== "object" ||
+        backgroundColor === null ||
+        Array.isArray(backgroundColor)
+      ) {
+        return "contributes.windowAppearance.backgroundColor must be an object";
+      }
+      for (const key of ["light", "dark"] as const) {
+        const value = backgroundColor[key];
+        if (value === undefined) continue;
+        if (typeof value !== "string" || !WINDOW_BACKGROUND_COLOR_PATTERN.test(value)) {
+          return `contributes.windowAppearance.backgroundColor.${key} must be #rrggbb or #rrggbbaa`;
+        }
+      }
     }
   }
 
@@ -1225,9 +1345,19 @@ export {
 } from "./skills.js";
 export {
   decodeCssEscapes,
+  findThemeCssUrlReferences,
+  isThemeAssetPath,
+  maskNonCodeCss,
+  normalizeThemeAssetPath,
   sanitizeThemeCss,
+  themeAssetUrl,
+  THEME_ASSET_EXTENSIONS,
+  THEME_ASSET_MAX_BYTES,
+  THEME_ASSET_SCHEME,
   THEME_CSS_MAX_BYTES,
+  type ThemeCssAssetResolver,
   type ThemeCssResult,
+  type ThemeCssUrlReference,
 } from "./theme-css.js";
 export {
   busTopicAllowed,

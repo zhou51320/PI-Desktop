@@ -707,12 +707,11 @@ provider/model, its declared tools, and the same host connection. A pinned or
 explicitly selected delegation model uses the exact provider/model binding
 saved in Settings for its effective thinking capability; models.dev supplies
 the baseline only. It runs under
-the same bounded provider retry policy as the parent. `maxTurns` is an optional
-per-definition backstop (maximum 80); omitted, `none`, or `0` means unlimited
-turns. The built-ins declare one sized to their job — `explorer` 60,
-`code-reviewer` 50, `test-runner` 40, `fixer` 80, `ui-designer` 80 — so a delegate that loops
-without converging ends as `truncated` with its partial report instead of
-running until the duration limit. `maxTokens` is an optional per-definition
+the same bounded provider retry policy as the parent. A delegate has no turn
+limit: it ends when it finishes, when the parent calls `TaskStop`, when the user
+Stops, or when a terminal parent error aborts it (ADR 0253). A document that
+still declares `maxTurns` loads normally and the key is ignored like any other
+unrecognized frontmatter key. `maxTokens` is an optional per-definition
 output cap (maximum 200000); omitted, `none`, or `0` follows the model's
 published limit. It overrides `maxTokens` on the model built for that delegate,
 so the adapter's derived `max_tokens` / `max_completion_tokens` /
@@ -725,8 +724,8 @@ The built-in `explorer` declares `Read`,
 `BrowserPreview` so it can open and inspect its rendered result before reporting.
 `BrowserPreview` only opens a live-reloading workspace HTML page; responsive,
 keyboard-focus, and reduced-motion checks require project-provided browser
-tests or other tooling. Its statuses are `completed`,
-`truncated`, `failed`, `aborted`, `timed_out` and the registry-only `stopped`;
+tests or other tooling. Its statuses are `completed`, `failed`,
+`aborted`, `timed_out` and the registry-only `stopped`;
 the terminal ones surface through `TaskWait`, whose text is
 the report (bounded to `MAX_SUBAGENT_REPORT_CHARS`, 12k) and whose details
 carry `delegationId`, `agent`, `modelId`, `thinkingLevel`, `status`, `startedAt`,
@@ -741,8 +740,8 @@ duration only covers starting the background work.
 **Delegate lifetime (D328).** The runtime does not idle-timeout or
 duration-timeout a delegate. `idle-timeout` / `max-duration` frontmatter still
 parses so old documents load, but those values are not armed. A delegate runs
-until it finishes, hits an explicit `maxTurns`, fails, is `TaskStop`'d, or the
-user Stops / the runtime is disposed. The parent agent judges whether to
+until it finishes, fails, is `TaskStop`'d, or the user Stops / the runtime is
+disposed. The parent agent judges whether to
 cancel via `TaskStop`; a one-line heartbeat (who, status, elapsed, turns, last
 tool) is what it has to go on while the delegate is running.
 
@@ -751,9 +750,9 @@ runtime swallows that `agent_end`, keeps the durable turn open, waits for the
 delegates, and prompts the parent with their reports. Ending the parent loop
 does not abort them.
 
-Fatal provider/stream errors (including exhausted HTTP 429), parent aborts,
-and explicit `maxTurns` retain their existing `failed`, `aborted`, and
-`truncated` outcomes. A terminal parent error also aborts leftover delegates,
+Fatal provider/stream errors (including exhausted HTTP 429) and parent aborts
+retain their existing `failed` and `aborted` outcomes. A terminal parent error
+also aborts leftover delegates,
 skips the resume prompt, and returns the session to idle so Continue is not
 `AGENT_BUSY` (D352).
 

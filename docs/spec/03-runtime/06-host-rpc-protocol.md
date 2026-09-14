@@ -206,6 +206,14 @@ type ToolBudgetHealth = {
   by last-opened time; includes records materialized by session imports
 - `projects.create({ path })` — upserts a durable project record without
   changing the active workspace and returns the host-generated project id
+- `projects.remove({ path })` — deletes one durable project row together with
+  every session attached to it, removing those sessions' transcript, scratch,
+  and review files and the project's durable memory, and never touching the
+  project folder on disk. Idempotent: an unknown path returns
+  `{ removed: false, sessionsRemoved: 0 }`. A path that is a root of a stored
+  multi-folder project group is refused so the group keeps a valid primary root,
+  and the call is refused (1008 / `CONFLICT`) while any attached session has a
+  running turn, so a live turn never loses the transcript it is writing.
 - `project.memory.get({ path })` — returns the durable memory for the canonical
   project path, or an empty record when no memory has been saved
 - `project.memory.set({ path, entries })` — normalizes and stores visual memory
@@ -213,6 +221,29 @@ type ToolBudgetHealth = {
   derived value is injected into that project's next runtime context as
   user-provided context. `{ path, content }` remains supported for legacy
   callers and returns a memory record without structured entries.
+- `project.groups.list` — returns one host-owned logical group per named
+  project. Existing path-only records are compatibility `legacy` groups.
+- `project.group.create({ name, folders })` — validates the display name and
+  local directories, stores the ordered roots, and returns the new group
+  without changing the active workspace. A non-legacy root cannot belong to a
+  second group.
+- `project.group.rename({ groupId, name })` — persists the group display name.
+- `project.group.update({ groupId, name, folders })` — edits the group name and
+  ordered roots. The primary root must remain first; duplicate roots are
+  removed, roots owned by another non-legacy group are rejected, and a root
+  with existing chats cannot be detached. Removed roots are retained as
+  suppressed historical paths rather than reappearing as standalone legacy
+  groups.
+- `project.group.memory.get/set({ groupId, entries })` — reads or normalizes
+  shared group memory using the existing 32 KiB entry limit.
+- `project.group.instructions.get/set({ groupId, content })` — reads or stores
+  shared group instructions using a bounded host-owned value.
+- `project.group.context({ path })` — resolves the group containing a primary or
+  member root and returns its shared instructions and memory for runtime launch.
+  Legacy groups return no group context so the path-scoped compatibility APIs
+  remain authoritative. Builtin tools default to the primary root; absolute
+  paths under registered additional roots use the same canonical containment
+  resolver and never become arbitrary external access.
 
 ### Secrets
 - `secrets.set`

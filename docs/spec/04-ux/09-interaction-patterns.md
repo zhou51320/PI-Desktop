@@ -137,7 +137,9 @@ recency only breaks ties between equally relevant matches.
   (Cmd+Q, application-menu Quit, tray Quit) is a separate confirm step
   (D363): Cancel leaves the app running; Confirm runs the ordered shutdown.
   A D230 window-close Quit does not ask again. Automated boot, supervision,
-  and capture probes skip the dialog. macOS keeps the
+  and capture probes skip the dialog, as does the restart that installs an
+  already-downloaded update — its installer is already running and gives up
+  when the app stays alive. macOS keeps the
   native Dock lifecycle (close keeps the app in the Dock; activating recreates
   the window). The bounds watchdog never restores a minimized or tray-hidden
   window.
@@ -200,11 +202,14 @@ may be retained while exactly one workspace supplies the visible shell context.
   blank values are not submittable. The title is metadata only, so the task's
   transcript, activity ordering, project binding, and empty-session state are
   unchanged. Escape, Cancel, or clicking the scrim dismisses the editor.
-- **Rename project** — the project overflow menu in the sidebar and Project
-  archive opens the same modal editor for the selected project. Saving trims
-  and persists a 1–80 Unicode-code-point display name in renderer-local
-  sidebar preferences. The normalized path remains authoritative, so the
-  workspace, sessions, transcript data, and on-disk folder are unchanged.
+- **Edit project** — the project overflow menu in the sidebar and Project
+  archive opens the same editor for the selected logical project. The editor
+  trims and persists a 1–80 Unicode-code-point group name and lists every
+  registered folder. The Primary folder stays first and cannot be removed;
+  additional folders can be added through the native multi-selection picker or
+  removed individually. Saving updates the host-owned group while preserving
+  the normalized paths, workspace identity, sessions, transcripts, and on-disk
+  folders. A folder with existing chats cannot be removed.
 - **Pin** toggles presentation priority. Pinned projects/conversations appear
   before unpinned rows within the selected secondary order. In the sidebar, a
   pinned project replaces its Folder glyph with a filled accent Star so its
@@ -999,8 +1004,9 @@ Work-panel and application-window resizing are implemented in MVP:
 
 - Preview mode unmounts MainChat and lets the work panel fill the client area
   beside the sidebar. A window-level 46px chrome row keeps New Task, sidebar,
-  and native window controls available; collapsed-sidebar macOS preview
-  reserves 76px on the left in windowed mode and 8px in fullscreen.
+  and native window controls available. In collapsed-sidebar macOS preview, the
+  panel header reserves the 76px windowed (8px fullscreen) traffic-light inset,
+  the preview action lane, and an 8px gap before its first tab.
 
 The expanded sidebar is fixed at 275px. Collapse/open changes only whether the
 column is present; the historical resize handle is hidden and legacy width
@@ -1073,11 +1079,16 @@ Project drag/drop follows these patterns:
 
 ### 8a.2 Reference chips and clipboard files
 
-- A paste containing one or more OS `File` objects is intercepted in the
-  textarea. Text-only paste stays native when its character count is at or
-  below the persisted `largePasteThreshold` (default 600); text-only paste
-  above the threshold is intercepted and converted into a temporary session
-  file reference.
+- Select non-whitespace `text/plain` over accompanying generated `image/*`
+  copies only when every file lacks a native path (Word text selection).
+  Native files, any non-image file, and image-only/whitespace-plus-image paste
+  retain their attachment flow. This uses the existing preload file-path
+  resolver and does not reread the system clipboard.
+- Selected text stays editable when its character count is at or below the
+  persisted `largePasteThreshold` (default 600); larger text becomes a temporary
+  session file reference. Small multiline paste preserves blank/trailing lines,
+  surrounding text, caret, and native undo; CRLF/CR becomes editor LF. Literal
+  HTML remains text: only escaped text and generated line breaks are inserted.
 - While bytes are being transferred, the textarea is read-only and exposes
   `aria-busy="true"`; the send and autocomplete controls are disabled.
 - Electron main saves bounded bytes under the originating session's scratch

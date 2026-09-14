@@ -9,7 +9,7 @@
  * (target/debug or target/release, or PI_DESKTOP_HOST_BIN).
  */
 import { spawn } from "node:child_process";
-import { rmSync, existsSync } from "node:fs";
+import { rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createTempDataDir,
@@ -27,6 +27,21 @@ if (!existsSync(join(appDir, "out/main/index.js"))) {
 if (!existsSync(electronBin)) {
   console.error("Electron binary missing:", electronBin);
   process.exit(1);
+}
+
+for (const preloadPath of [
+  join(appDir, "out/preload/index.cjs"),
+  join(appDir, "out/preload/plugin-panel.js"),
+]) {
+  if (!existsSync(preloadPath)) {
+    console.error("preload output missing:", preloadPath);
+    process.exit(1);
+  }
+  const source = readFileSync(preloadPath, "utf8");
+  if (/require\(["']\.\//.test(source)) {
+    console.error("sandbox preload must not require a local runtime chunk:", preloadPath);
+    process.exit(1);
+  }
 }
 
 const dataDir = createTempDataDir("pi-desktop-boot-");
@@ -99,6 +114,11 @@ child.on("close", (code) => {
     Array.isArray(sessions.heartbeatDurationsMs) &&
     sessions.heartbeatDurationsMs.length > 0 &&
     sessions.heartbeatDurationsMs.every((duration) => duration < 1000);
+  const projectRemove = probe?.projectRemove;
+  const projectRemoveOk =
+    projectRemove?.ok === true &&
+    projectRemove.removed === false &&
+    projectRemove.sessionsRemoved === 0;
   if (
     code === 0 &&
     probe?.ok &&
@@ -106,7 +126,8 @@ child.on("close", (code) => {
     probe.platform === process.platform &&
     (process.platform === "darwin" || probe.maximized === true) &&
     menuContractOk &&
-    sessionListOk
+    sessionListOk &&
+    projectRemoveOk
   ) {
     const menuDetail =
       process.platform === "darwin"
@@ -118,6 +139,11 @@ child.on("close", (code) => {
     );
     console.log(
       "PASS E2E-SESSION-list-refresh-keeps-desktop-responsive — " + JSON.stringify(sessions),
+    );
+    console.log(
+      "PASS E2E-PROJECT-delete-removes-project-and-owned-sessions — " +
+        "projectRemove IPC round-trip through the sandboxed preload " +
+        `{removed:${probe.projectRemove.removed}, sessionsRemoved:${probe.projectRemove.sessionsRemoved}}`,
     );
     cleanup(0);
   } else {

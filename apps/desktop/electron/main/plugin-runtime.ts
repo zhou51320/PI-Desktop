@@ -30,8 +30,13 @@ import {
   pluginToolName,
   resolveFsAccess,
   resolveMcpRefs,
+  normalizeThemeAssetPath,
   sanitizeThemeCss,
   skillIdFromPath,
+  themeAssetUrl,
+  THEME_ASSET_MAX_BYTES,
+  THEME_CSS_MAX_BYTES,
+  WINDOW_BACKGROUND_COLOR_PATTERN,
   resolvePluginLocalizedString,
   validateManifest,
   validateMcpServer,
@@ -96,6 +101,11 @@ export type RegisteredPluginTool = {
     args: unknown,
     ctx?: {
       sessionId?: string;
+      /**
+       * Runtime turn identity for this tool call. Matches the `turnId` the host
+       * reports through `session:turnEnded`, so a plugin can scope resources
+       * (overlays, caches, helper sessions) to one host turn.
+       */
       turnId?: string;
       signal?: AbortSignal;
       mode?: "agent" | "plan" | "goal";
@@ -149,6 +159,12 @@ export type RegisteredPluginTheme = {
   /** Palette the overrides layer on; drives `data-theme` in the renderer. */
   base: "light" | "dark";
   css: string;
+  /**
+   * Native window background while this theme is selected, per resolved
+   * palette. Absent unless the plugin declared it and holds
+   * `ui.window.appearance` (ADR 0248).
+   */
+  windowBackground?: { light?: string; dark?: string };
 };
 
 export type PluginPanelRequest = {
@@ -231,6 +247,16 @@ export type PluginHostServices = {
    * when it changes. Workspace switches push `workspace:changed` the same way.
    */
   getAppearance?: () => PluginAppearance;
+  /**
+   * Persist and apply `AppSettings.theme`. Used by `pi.app.setTheme` so a
+   * plugin panel can switch the shell theme without opening Settings.
+   */
+  setThemePreference?: (theme: string) => Promise<void>;
+  /**
+   * Broadcast that this plugin's contributed themes changed (runtime upsert /
+   * remove). Host should notify the renderer and refresh panel appearance.
+   */
+  onPluginThemesChanged?: (pluginId: string) => void;
   showToast: (message: string, level?: "info" | "warn" | "error") => void;
   notify: (input: { title: string; body?: string }) => void;
   getNotificationPermission: () => PluginNotificationPermission | Promise<PluginNotificationPermission>;
@@ -360,6 +386,10 @@ const HOST_API_ALLOWLIST = new Set([
   "app.getVersion",
   "app.getLocale",
   "app.getAppearance",
+  "app.setTheme",
+  "themes.upsert",
+  "themes.remove",
+  "themes.list",
   "plugin.getSettings",
   "plugin.setSettings",
   "plugin.getDataPath",
@@ -453,8 +483,11 @@ const NET_FETCH_MAX_REDIRECTS = 5;
 const MAX_SKILL_BYTES = 128 * 1024;
 /** Catalog lines stay short — the body carries the detail. */
 const MAX_SKILL_DESCRIPTION_CHARS = 240;
-/** A plugin may contribute at most this many themes. */
-const MAX_THEMES_PER_PLUGIN = 8;
+/**
+ * Theme ids accepted by `pi.themes.upsert` / `contributes.themes[].id`.
+ * Namespaced form `plugin:<pluginId>:<themeId>` is built by `pluginThemeId`.
+ */
+const THEME_LOCAL_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 /** A plugin may bring at most this many MCP servers. */
 const MAX_MCP_SERVERS_PER_PLUGIN = 8;
 /** A plugin may keep at most this many resident services alive. */
@@ -816,6 +849,68 @@ export function resolveInsidePlugin(pluginPath: string, relative: string): strin
 }
 
 /**
+ * Resolve one theme's declared assets to files inside the plugin package.
+ *
+ * The manifest validator already checked the shape; here each entry has to
+ * exist, stay out of the dependency directory, and fit the declared total. A
+ * theme that asks for more than the budget gets none of its assets, so a sheet
+ * referencing one is refused instead of served from a half-honoured list.
+ */
+function resolveThemeAssets(
+  pluginPath: string,
+  declared: readonly string[],
+): { files: Map<string, string>; dropped: number } {
+  const files = new Map<string, string>();
+  if (!declared.length) return { files, dropped: 0 };
+  let total = 0;
+  let dropped = 0;
+  for (const asset of declared) {
+    const normalized = normalizeThemeAssetPath(asset);
+    if (!normalized || normalized.split("/").includes("node_modules")) {
+      dropped += 1;
+      continue;
+    }
+    const absolute = resolveInsidePlugin(pluginPath, normalized);
+    if (!absolute || !existsSync(absolute)) {
+      dropped += 1;
+      continue;
+    }
+    try {
+      total += statSync(absolute).size;
+    } catch {
+      dropped += 1;
+      continue;
+    }
+    files.set(normalized, absolute);
+  }
+  if (total > THEME_ASSET_MAX_BYTES) return { files: new Map(), dropped: declared.length };
+  return { files, dropped };
+}
+
+/**
+ * Read `contributes.windowAppearance`.
+ *
+ * Only the two palette slots the host honours survive; the shape is the
+ * manifest validator's job, and anything that slips past it is dropped here
+ * rather than handed to `setBackgroundColor`.
+ */
+function resolveWindowBackground(
+  value: unknown,
+): { light?: string; dark?: string } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const backgroundColor = (value as { backgroundColor?: unknown }).backgroundColor;
+  if (!backgroundColor || typeof backgroundColor !== "object") return undefined;
+  const result: { light?: string; dark?: string } = {};
+  for (const key of ["light", "dark"] as const) {
+    const color = (backgroundColor as Record<string, unknown>)[key];
+    if (typeof color === "string" && WINDOW_BACKGROUND_COLOR_PATTERN.test(color)) {
+      result[key] = color;
+    }
+  }
+  return result.light || result.dark ? result : undefined;
+}
+
+/**
  * Minimal environment for a plugin process: the host's own env may carry
  * provider keys and shell secrets, and plugins have no business seeing them.
  */
@@ -859,6 +954,12 @@ export class PluginRuntime {
   private skills = new Map<string, RegisteredPluginSkill>();
   private agentExtensions = new Map<string, RegisteredAgentExtension>();
   private themes = new Map<string, RegisteredPluginTheme>();
+  /**
+   * Declared theme assets, keyed by plugin id and then by the package-relative
+   * path the sheet writes. The `plugin-asset:` handler answers only from here,
+   * so a path nobody declared has no URL at all (ADR 0248).
+   */
+  private themeAssets = new Map<string, Map<string, string>>();
   private mcpClients = new Map<string, McpServerClient[]>();
   private serviceStates = new Map<string, PluginServiceStatus>();
   private restarts = new Map<string, RestartRecord>();
@@ -966,6 +1067,19 @@ export class PluginRuntime {
   /** Themes contributed by loaded plugins, ordered by id for a stable list. */
   getThemes(): RegisteredPluginTheme[] {
     return [...this.themes.values()].sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  /**
+   * Absolute path of one declared theme asset, or null.
+   *
+   * The `plugin-asset:` handler calls this for every request, so a disabled
+   * plugin, an undeclared path, and a path outside the package all answer null
+   * for the same reason.
+   */
+  resolveThemeAsset(pluginId: string, assetPath: string): string | null {
+    const normalized = normalizeThemeAssetPath(assetPath);
+    if (!normalized) return null;
+    return this.themeAssets.get(pluginId)?.get(normalized) ?? null;
   }
 
   /** Supervision state of every resident service, ordered for a stable list. */
@@ -1131,7 +1245,20 @@ export class PluginRuntime {
    */
   broadcastEvent(event: string, args: unknown[] = []): void {
     for (const loaded of this.loaded.values()) {
-      loaded.child?.postMessage({ t: "event", event, args });
+      try {
+        loaded.child?.postMessage({ t: "event", event, args });
+      } catch (error) {
+        // One unreachable recipient must not starve the rest of the fan-out. The
+        // event is one-way: whoever is live still receives it.
+        this.services.audit?.({
+          pluginId: loaded.manifest.id,
+          api: "plugin.event.error",
+          ok: false,
+          event,
+          message: (error as Error).message,
+          ts: Date.now(),
+        });
+      }
     }
   }
 
@@ -1552,6 +1679,22 @@ export class PluginRuntime {
         return api.plugin.getSettings();
       case "app.getAppearance":
         return api.app.getAppearance();
+      case "app.setTheme":
+        await api.app.setTheme(String(payload?.themeId ?? ""));
+        return { ok: true };
+      case "themes.upsert":
+        await api.themes.upsert({
+          id: String(payload?.id ?? ""),
+          label: String(payload?.label ?? ""),
+          base: payload?.base === "light" ? "light" : "dark",
+          css: String(payload?.css ?? ""),
+        });
+        return { ok: true };
+      case "themes.remove":
+        await api.themes.remove(String(payload?.themeId ?? payload?.id ?? ""));
+        return { ok: true };
+      case "themes.list":
+        return api.themes.list();
       case "workspace.get":
         return api.workspace.get();
       case "models.list":
@@ -2091,6 +2234,9 @@ export class PluginRuntime {
     for (const [id, theme] of this.themes) {
       if (theme.pluginId === pluginId) this.themes.delete(id);
     }
+    // A gone plugin must stop serving its assets; the handler resolves through
+    // this map only, so clearing it revokes every `plugin-asset:` URL at once.
+    this.themeAssets.delete(pluginId);
     // Closing the client kills the stdio child / drops the HTTP session, so a
     // disabled plugin leaves no process behind.
     for (const client of this.mcpClients.get(pluginId) ?? []) {
@@ -2288,22 +2434,34 @@ export class PluginRuntime {
       return;
     }
 
+    // The native window background is a separate grant: a plugin may contribute
+    // themes and ask for neither, and a plugin that asked without the grant is
+    // audited rather than silently ignored.
+    const windowAppearanceDeclared =
+      loaded.manifest.contributes?.windowAppearance !== undefined;
+    const windowBackground = loaded.permissions.has("ui.window.appearance")
+      ? resolveWindowBackground(loaded.manifest.contributes?.windowAppearance)
+      : undefined;
+    if (windowAppearanceDeclared && !loaded.permissions.has("ui.window.appearance")) {
+      this.services.audit?.({
+        pluginId,
+        api: "plugin.themes.skipped",
+        ok: false,
+        errorCode: "PERMISSION_DENIED",
+        message: "contributes.windowAppearance requires ui.window.appearance",
+        ts: Date.now(),
+      });
+    }
+
     let accepted = 0;
     for (const contrib of declared) {
-      if (accepted >= MAX_THEMES_PER_PLUGIN) {
-        this.services.audit?.({
-          pluginId,
-          api: "plugin.themes.skipped",
-          ok: false,
-          errorCode: "LIMIT_EXCEEDED",
-          count: declared.length - accepted,
-          ts: Date.now(),
-        });
-        break;
-      }
       const themeId = String(contrib?.id ?? "").trim();
       const relative = String(contrib?.path ?? "").trim();
       if (!themeId || !relative) continue;
+      if (!THEME_LOCAL_ID_PATTERN.test(themeId)) {
+        this.skipTheme(pluginId, themeId, "INVALID_ID");
+        continue;
+      }
       const cssPath = resolveInsidePlugin(loaded.path, relative);
       if (!cssPath || !existsSync(cssPath)) {
         this.skipTheme(pluginId, themeId, "NOT_FOUND");
@@ -2316,7 +2474,23 @@ export class PluginRuntime {
         this.skipTheme(pluginId, themeId, "READ_FAILED");
         continue;
       }
-      const sanitized = sanitizeThemeCss(raw);
+      // Declared assets are the only relative references this theme may make;
+      // each one is rewritten to the host scheme so the sheet never carries a
+      // path the renderer would resolve itself.
+      const assets = resolveThemeAssets(loaded.path, contrib.assets ?? []);
+      if (assets.dropped) {
+        this.skipTheme(
+          pluginId,
+          themeId,
+          "INVALID_ASSET",
+          `${assets.dropped} declared asset(s) ignored`,
+        );
+      }
+      const sanitized = sanitizeThemeCss(raw, THEME_CSS_MAX_BYTES, (target) => {
+        const normalized = normalizeThemeAssetPath(target);
+        if (!normalized || !assets.files.has(normalized)) return null;
+        return themeAssetUrl(pluginId, normalized);
+      });
       if (!sanitized.ok) {
         this.skipTheme(pluginId, themeId, "INVALID_CSS", sanitized.error);
         continue;
@@ -2326,6 +2500,15 @@ export class PluginRuntime {
         this.skipTheme(pluginId, themeId, "DUPLICATE");
         continue;
       }
+      // The registry is per plugin and the resolver above is per theme: a sheet
+      // only reaches its own declarations, while the handler can serve any
+      // asset this plugin is allowed to have.
+      let registry = this.themeAssets.get(pluginId);
+      if (!registry) {
+        registry = new Map();
+        this.themeAssets.set(pluginId, registry);
+      }
+      for (const [assetPath, absolute] of assets.files) registry.set(assetPath, absolute);
       this.themes.set(id, {
         id,
         pluginId,
@@ -2333,6 +2516,7 @@ export class PluginRuntime {
         label: String(contrib.label ?? "").trim() || themeId,
         base: contrib.base === "light" ? "light" : "dark",
         css: sanitized.css,
+        ...(windowBackground ? { windowBackground } : {}),
       });
       accepted += 1;
     }
@@ -3395,6 +3579,98 @@ export class PluginRuntime {
             locale: this.services.getLocale?.() ?? "en",
             pluginTheme: null,
           },
+        setTheme: async (themeId: string) => {
+          this.assertPermission(loaded, "ui.theme");
+          const raw = String(themeId ?? "").trim();
+          const isBuiltin =
+            raw === "system" || raw === "light" || raw === "dark";
+          if (!isBuiltin && !this.themes.has(raw)) {
+            throw apiError("INVALID_ARGUMENT", `unknown theme id: ${raw || "(empty)"}`);
+          }
+          if (!this.services.setThemePreference) {
+            throw apiError("UNSUPPORTED", "host api not available: app.setTheme");
+          }
+          await this.services.setThemePreference(raw);
+          this.services.audit?.({
+            pluginId,
+            api: "app.setTheme",
+            ok: true,
+            theme: raw,
+            ts: Date.now(),
+          });
+        },
+      },
+      themes: {
+        upsert: async (input: {
+          id: string;
+          label: string;
+          base: "light" | "dark";
+          css: string;
+        }) => {
+          this.assertPermission(loaded, "ui.theme");
+          const themeId = String(input?.id ?? "").trim();
+          if (!THEME_LOCAL_ID_PATTERN.test(themeId)) {
+            throw apiError(
+              "INVALID_ARGUMENT",
+              `theme id must match [a-zA-Z][a-zA-Z0-9_-]{0,63}: ${themeId}`,
+            );
+          }
+          const base = input?.base === "light" ? "light" : "dark";
+          const label = String(input?.label ?? "").trim() || themeId;
+          const rawCss = String(input?.css ?? "");
+          const sanitized = sanitizeThemeCss(rawCss, THEME_CSS_MAX_BYTES);
+          if (!sanitized.ok) {
+            throw apiError("INVALID_ARGUMENT", sanitized.error);
+          }
+          const id = pluginThemeId(pluginId, themeId);
+          const previous = this.themes.get(id);
+          this.themes.set(id, {
+            id,
+            pluginId,
+            themeId,
+            label,
+            base,
+            css: sanitized.css,
+            ...(previous?.windowBackground ? { windowBackground: previous.windowBackground } : {}),
+          });
+          this.services.onPluginThemesChanged?.(pluginId);
+          this.services.audit?.({
+            pluginId,
+            api: "themes.upsert",
+            ok: true,
+            themeId,
+            ts: Date.now(),
+          });
+        },
+        remove: async (themeId: string) => {
+          this.assertPermission(loaded, "ui.theme");
+          const local = String(themeId ?? "").trim();
+          const id = local.startsWith("plugin:") ? local : pluginThemeId(pluginId, local);
+          const existing = this.themes.get(id);
+          if (!existing || existing.pluginId !== pluginId) {
+            throw apiError("NOT_FOUND", `theme not found: ${local}`);
+          }
+          this.themes.delete(id);
+          this.services.onPluginThemesChanged?.(pluginId);
+          this.services.audit?.({
+            pluginId,
+            api: "themes.remove",
+            ok: true,
+            themeId: existing.themeId,
+            ts: Date.now(),
+          });
+        },
+        list: async () => {
+          this.assertPermission(loaded, "ui.theme");
+          return this.getThemes()
+            .filter((theme) => theme.pluginId === pluginId)
+            .map((theme) => ({
+              id: theme.id,
+              themeId: theme.themeId,
+              label: theme.label,
+              base: theme.base,
+            }));
+        },
       },
       plugin: {
         getId: () => pluginId,
