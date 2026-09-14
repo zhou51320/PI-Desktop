@@ -1,0 +1,4 @@
+Error: Command pnpm exec electron-builder --win nsis --x64 --dir --config electron-builder.config.ts exited with code 1
+    at ChildProcess.<anonymous> (file:///D:/a/PI-Desktop/PI-Desktop/apps/desktop/scripts/package-win7.mjs:83:11)
+    at ChildProcess.emit (node:events:514:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:295:12)

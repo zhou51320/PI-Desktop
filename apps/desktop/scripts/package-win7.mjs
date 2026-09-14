@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 import {
   appendFileSync,
   cpSync,
+  createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -70,18 +71,43 @@ function runCommand(command, args, options = {}) {
       ? `${command}.cmd`
       : command
   return new Promise((resolve, reject) => {
+    const distWin7 = path.resolve(desktopDir, "dist/win7")
+    mkdirSync(distWin7, { recursive: true })
+    const logFile = path.join(distWin7, "electron-builder-output.log")
+    const logStream = createWriteStream(logFile, { flags: "a" })
+
+    let outputTail = ""
     const proc = spawn(bin, args, {
       cwd: desktopDir,
-      stdio: "inherit",
+      stdio: ["inherit", "pipe", "pipe"],
       shell: isWindows,
       ...options,
     })
-    proc.on("error", reject)
+
+    proc.stdout?.on("data", (chunk) => {
+      process.stdout.write(chunk)
+      logStream.write(chunk)
+      outputTail += chunk.toString()
+      if (outputTail.length > 12000) outputTail = outputTail.slice(-12000)
+    })
+
+    proc.stderr?.on("data", (chunk) => {
+      process.stderr.write(chunk)
+      logStream.write(chunk)
+      outputTail += chunk.toString()
+      if (outputTail.length > 12000) outputTail = outputTail.slice(-12000)
+    })
+
+    proc.on("error", (err) => {
+      logStream.end()
+      reject(err)
+    })
     proc.on("exit", (code) => {
+      logStream.end()
       if (code !== 0) {
         reject(
           new Error(
-            `Command ${command} ${args.join(" ")} exited with code ${code}`,
+            `Command ${command} ${args.join(" ")} exited with code ${code}\n--- Output tail ---\n${outputTail}`,
           ),
         )
       } else {
