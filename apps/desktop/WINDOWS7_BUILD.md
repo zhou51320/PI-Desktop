@@ -91,3 +91,21 @@ pnpm --filter @pi-desktop/desktop run report:win7-runtime apps/desktop/dist/win7
 ```
 
 This verifies that PE OS/subsystem versions remain 5.2, verifies required DLLs (`ffmpeg.dll`, `libEGL.dll`, `libGLESv2.dll`), and reports any risky imports.
+
+### 5. Backend Host Core Service (`host-core`)
+
+PI-Desktop requires the native Rust backend service `pi-desktop-host-core.exe` located at `<resources>/bin/pi-desktop-host-core.exe`:
+- **Role**: Manages local SQLite storage, session persistence, settings, and workspace data.
+- **Compilation**: Built with MSVC on Windows (`cargo build --release -p host-core`) or via the GitHub Actions Windows runner (`.github/workflows/win7-desktop-prebuilt.yml`).
+- If missing, the app will report `HOST_UNAVAILABLE` on startup.
+
+### 6. Using Electron's Node.js in Windows 7 System Environment
+
+PI-Desktop packages a wrapper script `node.cmd` inside the application directory (`win-unpacked` or installation directory):
+```cmd
+@echo off
+setlocal
+set ELECTRON_RUN_AS_NODE=1
+"%~dp0PI-Desktop.exe" %*
+```
+Adding the installation directory to Windows 7 `PATH` enables running `node -v` or any Node.js CLI script directly using Electron's embedded Node runtime without needing an external Node.js installation.

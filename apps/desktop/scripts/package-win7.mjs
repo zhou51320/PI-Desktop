@@ -93,12 +93,25 @@ try {
   await runCommand("pnpm", builderArgs, { cwd: desktopDir, env })
 
   await applyPiDesktopIcon()
+  generateNodeCmd()
   await verifyWin7Package(target)
   console.log("Win7 packaging completed successfully!")
   process.exit(0)
 } catch (error) {
   console.error("Packaging failed:", error)
   process.exit(1)
+}
+
+function generateNodeCmd() {
+  const unpacked = path.resolve(desktopDir, "dist/win7/win-unpacked")
+  if (existsSync(unpacked)) {
+    const nodeCmd = path.join(unpacked, "node.cmd")
+    writeFileSync(
+      nodeCmd,
+      `@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%~dp0PI-Desktop.exe" %*\r\n`,
+    )
+    console.log(`Generated node.cmd wrapper in ${unpacked}`)
+  }
 }
 
 function normalizeElectronDist(input) {
@@ -225,6 +238,21 @@ async function verifyWin7Package(target = "dir") {
         `Win7 package verification failed; missing required runtime file: ${file}`,
       )
     }
+  }
+
+  const hostBin = path.join(unpacked, "resources/bin/pi-desktop-host-core.exe")
+  const hostRelease = path.resolve(desktopDir, "../../target/release/pi-desktop-host-core.exe")
+  if (existsSync(hostRelease)) {
+    if (!existsSync(hostBin)) {
+      throw new Error(
+        `Win7 package verification failed; target/release/pi-desktop-host-core.exe was built but missing in package: ${hostBin}`,
+      )
+    }
+    console.log(`Verified bundled host-core binary: ${hostBin}`)
+  } else {
+    console.warn(
+      `[WARN] target/release/pi-desktop-host-core.exe not found. Win7 package will not include host-core backend service!`,
+    )
   }
 
   if (electronDist) {

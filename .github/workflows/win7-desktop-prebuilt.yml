@@ -19,8 +19,11 @@ env:
 jobs:
   package-pi-desktop-win7:
     name: package PI-Desktop with prebuilt Win7 Electron
-    runs-on: ubuntu-24.04
+    runs-on: windows-latest
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout PI-Desktop repository
         uses: actions/checkout@v7
@@ -29,11 +32,18 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build Rust host-core binary
+        run: cargo build --release --locked -p host-core
 
       - name: Download prebuilt Win7 Electron runtime
         run: |
@@ -42,7 +52,11 @@ jobs:
             --output "$RUNNER_TEMP/electron-win7-runtime.zip" \
             "$ELECTRON_WIN7_DIST_URL"
           echo "$ELECTRON_WIN7_DIST_SHA256  $RUNNER_TEMP/electron-win7-runtime.zip" | sha256sum --check -
-          unzip -q "$RUNNER_TEMP/electron-win7-runtime.zip" -d "$RUNNER_TEMP/electron-win7-runtime"
+          if command -v unzip >/dev/null 2>&1; then
+            unzip -q "$RUNNER_TEMP/electron-win7-runtime.zip" -d "$RUNNER_TEMP/electron-win7-runtime"
+          else
+            tar -xf "$RUNNER_TEMP/electron-win7-runtime.zip" -C "$RUNNER_TEMP/electron-win7-runtime"
+          fi
           test -f "$RUNNER_TEMP/electron-win7-runtime/electron.exe"
           test -f "$RUNNER_TEMP/electron-win7-runtime/version"
 

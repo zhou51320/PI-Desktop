@@ -35,6 +35,19 @@ function runCommand(command, args) {
 
 try {
   await runCommand("pnpm", ["run", "build:deps"])
+  try {
+    console.log("Checking for cargo to compile host-core binary...")
+    await runCommand("cargo", [
+      "build",
+      "--release",
+      "--manifest-path",
+      "../../Cargo.toml",
+      "-p",
+      "host-core",
+    ])
+  } catch (err) {
+    console.warn("Skipping host-core cargo build:", err.message)
+  }
   await runCommand("pnpm", ["run", "bundle:runtime"])
   await runCommand("pnpm", ["run", "build"])
   console.log("Win7 build completed successfully!")
