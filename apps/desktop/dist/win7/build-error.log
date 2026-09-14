@@ -1,0 +1,5 @@
+Error: EEXIST: file already exists, mkdir 'D:\a\PI-Desktop\PI-Desktop\apps\desktop\dist\win7\win-unpacked\resources\bin'
+    at mkdirSync (node:fs:1411:26)
+    at ensureHostCoreBinary (file:///D:/a/PI-Desktop/PI-Desktop/apps/desktop/scripts/package-win7.mjs:173:5)
+    at file:///D:/a/PI-Desktop/PI-Desktop/apps/desktop/scripts/package-win7.mjs:135:3
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)

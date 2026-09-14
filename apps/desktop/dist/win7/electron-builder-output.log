@@ -1,0 +1,22 @@
+  • electron-builder  version=26.15.3 os=10.0.26100
+  • loaded configuration  file=D:\a\PI-Desktop\PI-Desktop\apps\desktop\electron-builder.config.ts
+  • packageManager not detected by file, falling back to environment detection  resolvedPackageManager=pnpm detected=D:\a\PI-Desktop\PI-Desktop\apps\desktop
+  • packageManager not detected by file, falling back to environment detection  resolvedPackageManager=pnpm detected=D:\a\PI-Desktop\PI-Desktop\apps\desktop
+  • detected workspace root for project using process environment  pm=pnpm config=undefined resolved=undefined projectDir=D:\a\PI-Desktop\PI-Desktop\apps\desktop
+  • executing @electron/rebuild  electronVersion=40.2.0 arch=x64 buildFromSource=false workspaceRoot=D:\a\PI-Desktop\PI-Desktop\apps\desktop projectDir=./ appDir=./
+  • installing native dependencies  arch=x64
+  • completed installing native dependencies
+  • packaging       platform=win32 arch=x64 electron=40.2.0 appOutDir=dist\win7\win-unpacked
+  • using custom unpacked Electron distribution  electronDist=D:\a\_temp\electron-win7-runtime
+  • copying unpacked Electron  source=D:\a\_temp\electron-win7-runtime destination=D:\a\PI-Desktop\PI-Desktop\apps\desktop\dist\win7\win-unpacked
+  • searching for node modules  pm=pnpm searchDir=D:\a\PI-Desktop\PI-Desktop\apps\desktop
+  • updating asar integrity executable resource  executablePath=dist\win7\win-unpacked\PI-Desktop.exe
+[afterPack] Applied PI-Desktop icon to D:\a\PI-Desktop\PI-Desktop\apps\desktop\dist\win7\win-unpacked\PI-Desktop.exe
+  • executable resource editing and code signing skipped — signAndEditExecutable is false. To skip only code signing while keeping icon and metadata applied, use signExecutable: false instead.  exe=dist\win7\win-unpacked\PI-Desktop.exe
+  • building        target=nsis file=dist\win7\PI-Desktop-win7-Setup-0.14.8-x64.exe archs=x64 oneClick=false perMachine=false
+  • downloaded      label=nsis-3.0.4.1.7z progress=100%
+  • downloaded      label=7zip-win-x64.tar.gz progress=100%
+  • downloaded      label=nsis-resources-3.4.1.7z progress=100%
+  • signing with signtool.exe  path=dist\win7\PI-Desktop-win7-Setup-0.14.8-x64.__uninstaller.exe
+  • signing with signtool.exe  path=dist\win7\PI-Desktop-win7-Setup-0.14.8-x64.exe
+  • building block map  blockMapFile=dist\win7\PI-Desktop-win7-Setup-0.14.8-x64.exe.blockmap
