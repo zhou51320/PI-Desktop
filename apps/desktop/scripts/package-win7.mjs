@@ -162,16 +162,20 @@ try {
 }
 
 function ensureHostCoreBinary() {
-  const unpacked = path.resolve(desktopDir, "dist/win7/win-unpacked")
-  const hostBin = path.join(unpacked, "resources/bin/pi-desktop-host-core.exe")
-  const hostRelease = path.resolve(
-    desktopDir,
-    "../../target/release/pi-desktop-host-core.exe",
-  )
-  if (existsSync(hostRelease) && existsSync(unpacked) && !existsSync(hostBin)) {
-    console.log(`Copying host-core binary to ${hostBin}...`)
-    mkdirSync(path.dirname(hostBin), { recursive: true })
-    cpSync(hostRelease, hostBin)
+  try {
+    const unpacked = path.resolve(desktopDir, "dist/win7/win-unpacked")
+    const hostBin = path.join(unpacked, "resources/bin/pi-desktop-host-core.exe")
+    const hostRelease = path.resolve(
+      desktopDir,
+      "../../target/release/pi-desktop-host-core.exe",
+    )
+    if (existsSync(hostRelease) && existsSync(unpacked) && !existsSync(hostBin)) {
+      console.log(`Copying host-core binary to ${hostBin}...`)
+      mkdirSync(path.dirname(hostBin), { recursive: true })
+      cpSync(hostRelease, hostBin)
+    }
+  } catch (err) {
+    console.warn(`[ensureHostCoreBinary] Notice: ${err?.message || err}`)
   }
 }
 

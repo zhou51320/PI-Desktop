@@ -111,7 +111,7 @@ const config: Configuration = {
       ? [
           {
             from: hostCoreExePath,
-            to: "bin",
+            to: "bin/pi-desktop-host-core.exe",
           },
         ]
       : [],
