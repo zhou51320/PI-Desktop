@@ -1,0 +1,78 @@
+name: win7-desktop-prebuilt
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: win7-desktop-prebuilt-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ELECTRON_WIN7_VERSION: "v40.2.0"
+  ELECTRON_WIN7_DIST_URL: "https://github.com/e3kskoy7wqk/Electron-for-windows-7/releases/download/v40.2.0/dist.zip"
+  ELECTRON_WIN7_DIST_SHA256: "ed4ebb022624ae38f764fcfc1dc1ce30fe2145298975d4c90e8d95412deeadea"
+
+jobs:
+  package-pi-desktop-win7:
+    name: package PI-Desktop with prebuilt Win7 Electron
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout PI-Desktop repository
+        uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download prebuilt Win7 Electron runtime
+        run: |
+          mkdir -p "$RUNNER_TEMP/electron-win7-runtime"
+          curl --fail --location --retry 5 --retry-delay 5 \
+            --output "$RUNNER_TEMP/electron-win7-runtime.zip" \
+            "$ELECTRON_WIN7_DIST_URL"
+          echo "$ELECTRON_WIN7_DIST_SHA256  $RUNNER_TEMP/electron-win7-runtime.zip" | sha256sum --check -
+          unzip -q "$RUNNER_TEMP/electron-win7-runtime.zip" -d "$RUNNER_TEMP/electron-win7-runtime"
+          test -f "$RUNNER_TEMP/electron-win7-runtime/electron.exe"
+          test -f "$RUNNER_TEMP/electron-win7-runtime/version"
+
+      - name: Build Win7 desktop assets
+        working-directory: apps/desktop
+        run: pnpm run build:win7
+
+      - name: Package Win7 desktop (Dir & NSIS Installer)
+        working-directory: apps/desktop
+        run: pnpm run package:win7
+        env:
+          PI_DESKTOP_ELECTRON_DIST: ${{ runner.temp }}/electron-win7-runtime
+          PI_DESKTOP_WIN7_TARGET: both
+
+      - name: Write runtime provenance report
+        working-directory: apps/desktop
+        run: |
+          pnpm run report:win7-runtime "$PI_DESKTOP_ELECTRON_DIST" --out dist/win7/prebuilt-runtime
+          pnpm run report:win7-runtime dist/win7/win-unpacked --compare "$PI_DESKTOP_ELECTRON_DIST" --out dist/win7/prebuilt-runtime-comparison
+        env:
+          PI_DESKTOP_ELECTRON_DIST: ${{ runner.temp }}/electron-win7-runtime
+
+      - name: Upload Win7 desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-desktop-win7-prebuilt-electron
+          path: |
+            apps/desktop/dist/win7/win-unpacked/**
+            apps/desktop/dist/win7/*.exe
+            apps/desktop/dist/win7/*.blockmap
+            apps/desktop/dist/win7/*.json
+            apps/desktop/dist/win7/*.md
+          if-no-files-found: error

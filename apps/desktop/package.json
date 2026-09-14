@@ -28,7 +28,11 @@
     "dist": "pnpm run build:deps && pnpm run build:host-release && pnpm run bundle:runtime && electron-vite build && electron-builder --publish never",
     "dist:mac": "pnpm run build:deps && pnpm run build:host-release && pnpm run bundle:runtime && electron-vite build && electron-builder --mac --publish never",
     "dist:win": "pnpm run build:deps && pnpm run build:host-release && pnpm run bundle:runtime && electron-vite build && electron-builder --win --publish never",
-    "dist:linux": "pnpm run build:deps && pnpm run build:host-release && pnpm run bundle:runtime && electron-vite build && electron-builder --linux --publish never"
+    "dist:linux": "pnpm run build:deps && pnpm run build:host-release && pnpm run bundle:runtime && electron-vite build && electron-builder --linux --publish never",
+    "build:win7": "node ./scripts/build-win7.mjs",
+    "package:win7": "node ./scripts/package-win7.mjs",
+    "package:win7:nsis": "node ./scripts/package-win7.mjs --nsis",
+    "report:win7-runtime": "node ./scripts/report-win7-runtime.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
@@ -64,6 +68,7 @@
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
+    "resedit": "^3.1.0",
     "shiki": "^4.4.3",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
