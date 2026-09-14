@@ -70,27 +70,18 @@ function runCommand(command, args, options = {}) {
       ? `${command}.cmd`
       : command
   return new Promise((resolve, reject) => {
-    let output = ""
     const proc = spawn(bin, args, {
       cwd: desktopDir,
-      ...options,
+      stdio: "inherit",
       shell: isWindows,
-    })
-    proc.stdout?.on("data", (data) => {
-      process.stdout.write(data)
-      output += data.toString()
-    })
-    proc.stderr?.on("data", (data) => {
-      process.stderr.write(data)
-      output += data.toString()
+      ...options,
     })
     proc.on("error", reject)
     proc.on("exit", (code) => {
       if (code !== 0) {
-        const lastLines = output.split("\n").slice(-40).join("\n")
         reject(
           new Error(
-            `Command ${command} ${args.join(" ")} exited with code ${code}\n--- Output tail ---\n${lastLines}`,
+            `Command ${command} ${args.join(" ")} exited with code ${code}`,
           ),
         )
       } else {
@@ -101,14 +92,15 @@ function runCommand(command, args, options = {}) {
 }
 
 try {
-  const builderArgs = [
-    "exec",
-    "electron-builder",
-    "--win",
-    "--x64",
-    "--config",
-    "electron-builder.config.ts",
-  ]
+  const builderArgs = ["exec", "electron-builder"]
+  if (target === "dir") {
+    builderArgs.push("--win", "dir", "--x64")
+  } else if (target === "nsis") {
+    builderArgs.push("--win", "nsis", "--x64")
+  } else if (target === "both") {
+    builderArgs.push("--win", "nsis", "--x64", "--dir")
+  }
+  builderArgs.push("--config", "electron-builder.config.ts")
 
   console.log(`Running: pnpm ${builderArgs.join(" ")}`)
   await runCommand("pnpm", builderArgs, { cwd: desktopDir, env })

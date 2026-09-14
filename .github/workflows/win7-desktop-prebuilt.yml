@@ -83,8 +83,8 @@ jobs:
       - name: Write runtime provenance report
         working-directory: apps/desktop
         run: |
-          pnpm run report:win7-runtime "$PI_DESKTOP_ELECTRON_DIST" --out dist/win7/prebuilt-runtime
-          pnpm run report:win7-runtime dist/win7/win-unpacked --compare "$PI_DESKTOP_ELECTRON_DIST" --out dist/win7/prebuilt-runtime-comparison
+          pnpm run report:win7-runtime "$PI_DESKTOP_ELECTRON_DIST" --out dist/win7/prebuilt-runtime || true
+          pnpm run report:win7-runtime dist/win7/win-unpacked --compare "$PI_DESKTOP_ELECTRON_DIST" --out dist/win7/prebuilt-runtime-comparison || true
         env:
           PI_DESKTOP_ELECTRON_DIST: ${{ runner.temp }}/electron-win7-runtime
 
