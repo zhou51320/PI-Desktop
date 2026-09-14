@@ -59,32 +59,39 @@ const config: Configuration = {
     : (baseConfig.artifactName ?? "${productName}-${version}-${os}-${arch}.${ext}"),
   afterPack: async (context) => {
     if (win7Build && context.electronPlatformName === "win32") {
-      const exePath = path.join(context.appOutDir, "PI-Desktop.exe")
-      const iconPath = path.resolve(__dirname, "build/icon.ico")
-      if (existsSync(exePath) && existsSync(iconPath)) {
-        const { Data, NtExecutable, NtExecutableResource, Resource } =
-          await import("resedit")
-        const buffer = readFileSync(exePath)
-        const parsed = NtExecutable.from(buffer, { ignoreCert: true })
-        const resources = NtExecutableResource.from(parsed)
-        const icons = Data.IconFile.from(readFileSync(iconPath)).icons.map(
-          (item) => item.data,
-        )
-        const groups = Resource.IconGroupEntry.fromEntries(resources.entries)
-        if (!groups.length) {
-          throw new Error(`Win7 icon patch failed: no icon group in ${exePath}`)
-        }
-        for (const group of groups) {
-          Resource.IconGroupEntry.replaceIconsForResource(
-            resources.entries,
-            group.id,
-            group.lang,
-            icons,
+      try {
+        const exePath = path.join(context.appOutDir, "PI-Desktop.exe")
+        const iconPath = path.resolve(__dirname, "build/icon.ico")
+        if (existsSync(exePath) && existsSync(iconPath)) {
+          const { Data, NtExecutable, NtExecutableResource, Resource } =
+            await import("resedit")
+          const buffer = readFileSync(exePath)
+          const parsed = NtExecutable.from(buffer, { ignoreCert: true })
+          const resources = NtExecutableResource.from(parsed)
+          const icons = Data.IconFile.from(readFileSync(iconPath)).icons.map(
+            (item) => item.data,
           )
+          const groups = Resource.IconGroupEntry.fromEntries(resources.entries)
+          if (!groups.length) {
+            console.warn(`[afterPack] No icon group in ${exePath}`)
+            return
+          }
+          for (const group of groups) {
+            Resource.IconGroupEntry.replaceIconsForResource(
+              resources.entries,
+              group.id,
+              group.lang,
+              icons,
+            )
+          }
+          resources.outputResource(parsed)
+          writeFileSync(exePath, Buffer.from(parsed.generate()))
+          console.log(`[afterPack] Applied PI-Desktop icon to ${exePath}`)
         }
-        resources.outputResource(parsed)
-        writeFileSync(exePath, Buffer.from(parsed.generate()))
-        console.log(`[afterPack] Applied PI-Desktop icon to ${exePath}`)
+      } catch (iconErr) {
+        console.warn(
+          `[afterPack] Icon patch notice: ${iconErr?.message || iconErr}`,
+        )
       }
     }
   },

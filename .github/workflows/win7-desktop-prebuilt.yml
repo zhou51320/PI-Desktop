@@ -90,7 +90,9 @@ jobs:
 
       - name: Debug dist/win7 contents
         if: always()
-        run: ls -la apps/desktop/dist/win7 || true
+        run: |
+          ls -la apps/desktop/dist/win7 || true
+          cat apps/desktop/dist/win7/build-error.log || true
 
       - name: Upload Win7 desktop artifact
         uses: actions/upload-artifact@v4
@@ -103,4 +105,5 @@ jobs:
             apps/desktop/dist/win7/*.blockmap
             apps/desktop/dist/win7/*.json
             apps/desktop/dist/win7/*.md
+            apps/desktop/dist/win7/*.log
           if-no-files-found: warn

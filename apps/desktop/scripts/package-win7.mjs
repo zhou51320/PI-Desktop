@@ -65,18 +65,34 @@ if (electronDist) {
 
 function runCommand(command, args, options = {}) {
   const isWindows = process.platform === "win32"
-  const bin = isWindows && (command === "pnpm" || command === "npm") ? `${command}.cmd` : command
+  const bin =
+    isWindows && (command === "pnpm" || command === "npm")
+      ? `${command}.cmd`
+      : command
   return new Promise((resolve, reject) => {
+    let output = ""
     const proc = spawn(bin, args, {
       cwd: desktopDir,
       ...options,
-      stdio: "inherit",
       shell: isWindows,
+    })
+    proc.stdout?.on("data", (data) => {
+      process.stdout.write(data)
+      output += data.toString()
+    })
+    proc.stderr?.on("data", (data) => {
+      process.stderr.write(data)
+      output += data.toString()
     })
     proc.on("error", reject)
     proc.on("exit", (code) => {
       if (code !== 0) {
-        reject(new Error(`Command ${command} ${args.join(" ")} exited with code ${code}`))
+        const lastLines = output.split("\n").slice(-40).join("\n")
+        reject(
+          new Error(
+            `Command ${command} ${args.join(" ")} exited with code ${code}\n--- Output tail ---\n${lastLines}`,
+          ),
+        )
       } else {
         resolve()
       }
@@ -85,15 +101,14 @@ function runCommand(command, args, options = {}) {
 }
 
 try {
-  const builderArgs = ["exec", "electron-builder"]
-  if (target === "dir") {
-    builderArgs.push("--win", "--x64", "--dir")
-  } else if (target === "nsis") {
-    builderArgs.push("--win", "nsis", "--x64")
-  } else if (target === "both") {
-    builderArgs.push("--win", "nsis", "--x64", "--dir")
-  }
-  builderArgs.push("--config", "electron-builder.config.ts")
+  const builderArgs = [
+    "exec",
+    "electron-builder",
+    "--win",
+    "--x64",
+    "--config",
+    "electron-builder.config.ts",
+  ]
 
   console.log(`Running: pnpm ${builderArgs.join(" ")}`)
   await runCommand("pnpm", builderArgs, { cwd: desktopDir, env })
@@ -109,6 +124,15 @@ try {
   process.exit(0)
 } catch (error) {
   console.error("Packaging failed:", error?.stack || error)
+  try {
+    const distWin7 = path.resolve(desktopDir, "dist/win7")
+    mkdirSync(distWin7, { recursive: true })
+    writeFileSync(
+      path.join(distWin7, "build-error.log"),
+      `${error?.stack || error}\n`,
+      "utf8",
+    )
+  } catch {}
   writeStepSummary(target, error)
   process.exit(1)
 }
