@@ -34,10 +34,11 @@ const isBoth =
 const target = isBoth ? "both" : isNsis ? "nsis" : "dir"
 
 const patchScript = path.resolve(desktopDir, "scripts/electron-builder-nsis-patch.cjs")
+const normalizedPatch = patchScript.replaceAll("\\", "/")
 const existingNodeOptions = process.env.NODE_OPTIONS ?? ""
 const nodeOptions = existingNodeOptions
-  ? `--require "${patchScript}" ${existingNodeOptions}`
-  : `--require "${patchScript}"`
+  ? `--require "${normalizedPatch}" ${existingNodeOptions}`
+  : `--require "${normalizedPatch}"`
 
 const env = {
   ...process.env,
@@ -61,12 +62,15 @@ if (electronDist) {
   console.log(`Using Electron dist: ${electronDist}`)
 }
 
-function runCommand(command, args, options) {
+function runCommand(command, args, options = {}) {
+  const isWindows = process.platform === "win32"
+  const bin = isWindows && (command === "pnpm" || command === "npm") ? `${command}.cmd` : command
   return new Promise((resolve, reject) => {
-    const proc = spawn(command, args, {
+    const proc = spawn(bin, args, {
+      cwd: desktopDir,
       ...options,
       stdio: "inherit",
-      shell: true,
+      shell: isWindows,
     })
     proc.on("error", reject)
     proc.on("exit", (code) => {

@@ -60,9 +60,18 @@ jobs:
           test -f "$RUNNER_TEMP/electron-win7-runtime/electron.exe"
           test -f "$RUNNER_TEMP/electron-win7-runtime/version"
 
+      - name: Prepare workspace packages and bundle runtime
+        run: |
+          pnpm --filter '@pi-desktop/desktop^...' --fail-if-no-match build
+          pnpm -C packages/agent-runtime bundle
+
       - name: Build Win7 desktop assets
         working-directory: apps/desktop
-        run: pnpm run build:win7
+        env:
+          PI_DESKTOP_TARGET_PLATFORM: win32
+          PI_DESKTOP_TARGET_ARCH: x64
+          PI_DESKTOP_WIN7: "1"
+        run: pnpm run build
 
       - name: Package Win7 desktop (Dir & NSIS Installer)
         working-directory: apps/desktop
