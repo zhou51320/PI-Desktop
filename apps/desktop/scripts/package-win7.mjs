@@ -118,7 +118,7 @@ function runCommand(command, args, options = {}) {
 }
 
 try {
-  const builderArgs = ["exec", "electron-builder"]
+  const builderArgs = ["exec", "electron-builder", "--publish", "never"]
   if (target === "dir") {
     builderArgs.push("--win", "dir", "--x64")
   } else if (target === "nsis") {

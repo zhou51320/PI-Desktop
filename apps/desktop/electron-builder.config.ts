@@ -46,6 +46,7 @@ try {
 
 const config: Configuration = {
   ...baseConfig,
+  publish: win7Build ? null : baseConfig.publish,
   electronVersion: win7Build ? win7ElectronVersion : undefined,
   electronDist: win7Build ? win7ElectronDist : undefined,
   directories: {
