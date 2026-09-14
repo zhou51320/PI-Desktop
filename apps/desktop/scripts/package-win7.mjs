@@ -85,13 +85,13 @@ function runCommand(command, args, options = {}) {
 }
 
 try {
-  const builderArgs = ["exec", "electron-builder", "--win", "--x64"]
+  const builderArgs = ["exec", "electron-builder"]
   if (target === "dir") {
-    builderArgs.push("--dir")
+    builderArgs.push("--win", "--x64", "--dir")
   } else if (target === "nsis") {
-    builderArgs.push("nsis")
+    builderArgs.push("--win", "nsis", "--x64")
   } else if (target === "both") {
-    builderArgs.push("nsis", "--dir")
+    builderArgs.push("--win", "nsis", "--x64", "--dir")
   }
   builderArgs.push("--config", "electron-builder.config.ts")
 
